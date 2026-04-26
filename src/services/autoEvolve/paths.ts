@@ -875,6 +875,17 @@ export function getCollapseFeedbackLedgerPath(): string {
   return join(getOracleDir(), 'collapse-feedback.ndjson')
 }
 
+/**
+ * G6 Step 4(2026-04-26)skill candidate emit ledger。
+ *   - /skill-candidates --emit --apply 成功 compile 后每个 manifest 写一行;
+ *   - 字段: {at, manifestId, kind, candidateName, support, successRate, confidence, score, status, pid};
+ *   - 与 organism-invocation.ndjson 做 join,统计 emitted shadow 在 N 天内是否被调用;
+ *   - 默认写入(除非 CLAUDE_SKILL_CANDIDATE_EMIT_LEDGER=off);fail-open,失败不抛。
+ */
+export function getSkillCandidateEmitLedgerPath(): string {
+  return join(getOracleDir(), 'skill-candidate-emit.ndjson')
+}
+
 /** 确保目录存在(幂等,失败静默) */
 export function ensureDir(dir: string): void {
   try {

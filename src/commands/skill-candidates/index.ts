@@ -29,6 +29,10 @@ const USAGE = `Usage:
                                           CLAUDE_SKILL_CANDIDATE_EMIT=on and
                                           compiles top N (1..50, default 3) to
                                           genome/shadow/.
+  /skill-candidates --outcome [--window-hours H] [--dormant-hours D]
+                                          G6 Step 4: join emit ledger × organism-
+                                          invocation ledger, show emitted shadow
+                                          dormancy status. read-only.
   /skill-candidates --help                this message
 `
 
@@ -42,6 +46,10 @@ interface ParsedFlags {
   emit: boolean
   apply: boolean
   top: number
+  // G6 Step 4(2026-04-26)outcome 子视图。
+  outcome: boolean
+  windowHours: number
+  dormantHours: number
   error?: string
 }
 
@@ -56,6 +64,10 @@ function parseFlags(args: string): ParsedFlags {
   let emit = false
   let apply = false
   let top = 3
+  // G6 Step 4 outcome 子视图参数
+  let outcome = false
+  let windowHours = 168 // 7d
+  let dormantHours = 72 // 3d
 
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!
@@ -81,6 +93,9 @@ function parseFlags(args: string): ParsedFlags {
           emit,
           apply,
           top,
+          outcome,
+          windowHours,
+          dormantHours,
           error: `--min-support must be 1..1000\n${USAGE}`,
         }
       }
@@ -101,6 +116,9 @@ function parseFlags(args: string): ParsedFlags {
           emit,
           apply,
           top,
+          outcome,
+          windowHours,
+          dormantHours,
           error: `--min-rate must be 0..1\n${USAGE}`,
         }
       }
@@ -121,6 +139,9 @@ function parseFlags(args: string): ParsedFlags {
           emit,
           apply,
           top,
+          outcome,
+          windowHours,
+          dormantHours,
           error: `--min-conf must be 0..1\n${USAGE}`,
         }
       }
@@ -141,6 +162,9 @@ function parseFlags(args: string): ParsedFlags {
           emit,
           apply,
           top,
+          outcome,
+          windowHours,
+          dormantHours,
           error: `--limit must be 1..200\n${USAGE}`,
         }
       }
@@ -169,10 +193,64 @@ function parseFlags(args: string): ParsedFlags {
           emit,
           apply,
           top,
+          outcome,
+          windowHours,
+          dormantHours,
           error: `--top must be 1..50\n${USAGE}`,
         }
       }
       top = n
+      continue
+    }
+    // G6 Step 4(2026-04-26)outcome 子视图 flag handlers
+    if (t === '--outcome') {
+      outcome = true
+      continue
+    }
+    if (t === '--window-hours') {
+      const next = tokens[++i]
+      const n = next ? parseInt(next, 10) : NaN
+      if (!Number.isFinite(n) || n < 1 || n > 24 * 60) {
+        return {
+          minSupport,
+          minRate,
+          minConf,
+          limit,
+          json,
+          help,
+          emit,
+          apply,
+          top,
+          outcome,
+          windowHours,
+          dormantHours,
+          error: `--window-hours must be 1..${24 * 60}\n${USAGE}`,
+        }
+      }
+      windowHours = n
+      continue
+    }
+    if (t === '--dormant-hours') {
+      const next = tokens[++i]
+      const n = next ? parseInt(next, 10) : NaN
+      if (!Number.isFinite(n) || n < 1 || n > 24 * 60) {
+        return {
+          minSupport,
+          minRate,
+          minConf,
+          limit,
+          json,
+          help,
+          emit,
+          apply,
+          top,
+          outcome,
+          windowHours,
+          dormantHours,
+          error: `--dormant-hours must be 1..${24 * 60}\n${USAGE}`,
+        }
+      }
+      dormantHours = n
       continue
     }
     return {
@@ -188,13 +266,18 @@ function parseFlags(args: string): ParsedFlags {
       error: `unknown flag: ${t}\n${USAGE}`,
     }
   }
-  return { minSupport, minRate, minConf, limit, json, help, emit, apply, top }
+  return { minSupport, minRate, minConf, limit, json, help, emit, apply, top, outcome, windowHours, dormantHours }
 }
 
 function call(args: string): LocalCommandCall {
   const parsed = parseFlags(args)
   if (parsed.help) return { type: 'text', value: USAGE }
   if (parsed.error) return { type: 'text', value: parsed.error }
+
+  // G6 Step 4(2026-04-26)outcome 子视图:独立早返,不依赖 miner。
+  if (parsed.outcome) {
+    return runOutcomeView(parsed)
+  }
 
   const { findSkillWorthyCandidates } = require(
     '../../services/proceduralMemory/skillCandidateMiner.js',
@@ -309,12 +392,87 @@ function call(args: string): LocalCommandCall {
           `  [${r.manifest.id}] status=${r.manifest.status} kind=${r.manifest.kind} name=${r.manifest.name}\n     manifest=${r.manifestPath}`,
         )
       }
+      // G6 Step 4(2026-04-26)emit ledger:把每条真正编译出的 manifest 记下
+      //   来,配合 organism-invocation ledger 做 "emit → 真实调用" 闭环。
+      //   - source row 通过 candidateName 对应(top 切片与 compileCandidates
+      //     保留同序,rows.slice(0, top) 即 sourceCandidates[0..len-1]);
+      //   - 默认写入,CLAUDE_SKILL_CANDIDATE_EMIT_LEDGER=off 关闭;
+      //   - fail-open:ledger 写失败不影响 compile 结果。
+      try {
+        const { recordSkillCandidateEmit } = require(
+          '../../services/proceduralMemory/skillCandidateOutcome.js',
+        ) as typeof import('../../services/proceduralMemory/skillCandidateOutcome.js')
+        const sourceRows = rows.slice(0, parsed.top)
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i]!
+          const src = sourceRows[i]
+          recordSkillCandidateEmit({
+            manifestId: r.manifest.id,
+            kind: r.manifest.kind,
+            candidateName: src?.name ?? r.manifest.name,
+            support: src?.support ?? 0,
+            successRate: src?.successRate ?? 0,
+            confidence: src?.confidence ?? 0,
+            score: src?.score ?? 0,
+            status: r.manifest.status,
+          })
+        }
+      } catch {
+        /* fail-open: ledger 失败不影响 compile */
+      }
     } catch (e) {
       lines.push('')
       lines.push(`compile failed: ${(e as Error).message}`)
     }
   }
 
+  return { type: 'text', value: lines.join('\n') }
+}
+
+/**
+ * G6 Step 4(2026-04-26)outcome 子视图 —— 只读,独立入口
+ *
+ *   读 skill-candidate-emit.ndjson × organism-invocation.ndjson,输出每条
+ *   emitted shadow 的 age/invoke/dormant 状态。支持 --json 与 --window-hours/
+ *   --dormant-hours,不依赖 miner,不触发任何写入。
+ */
+function runOutcomeView(parsed: ParsedFlags): LocalCommandCall {
+  const { summarizeSkillCandidateOutcomes } = require(
+    '../../services/proceduralMemory/skillCandidateOutcome.js',
+  ) as typeof import('../../services/proceduralMemory/skillCandidateOutcome.js')
+  const summary = summarizeSkillCandidateOutcomes({
+    windowHours: parsed.windowHours,
+    dormantAgeHours: parsed.dormantHours,
+    maxRows: parsed.limit,
+  })
+  if (parsed.json) {
+    return { type: 'text', value: JSON.stringify(summary, null, 2) }
+  }
+  const lines: string[] = []
+  lines.push(
+    `skill-candidate outcome (window=${summary.windowHours}h, dormant>=${summary.dormantAgeHours}h)`,
+  )
+  lines.push(
+    `  total emitted: ${summary.totalEmitted}  invoked: ${summary.totalInvoked}  dormant: ${summary.totalDormant}`,
+  )
+  if (summary.rows.length === 0) {
+    lines.push('(no emitted shadow in window)')
+    return { type: 'text', value: lines.join('\n') }
+  }
+  lines.push('')
+  lines.push('D?  age(h)  inv  manifestId                                      name')
+  for (const r of summary.rows) {
+    const flag = r.dormant ? 'D ' : '  '
+    const age = r.ageHours.toFixed(1).padStart(6)
+    const inv = String(r.invokedCount).padStart(3)
+    const mid = r.manifestId.padEnd(46).slice(0, 46)
+    const nm = (r.candidateName || '').slice(0, 40)
+    lines.push(`${flag}  ${age}  ${inv}  ${mid}  ${nm}`)
+  }
+  lines.push('')
+  lines.push(
+    'Note: dormant = emitted ≥ dormant-hours ago AND never invoked. Read-only.',
+  )
   return { type: 'text', value: lines.join('\n') }
 }
 
