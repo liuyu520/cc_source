@@ -1,5 +1,9 @@
 import { feature } from 'bun:bundle'
 import { microcompactMessages } from '../../services/compact/microCompact.js'
+import {
+  buildTokenEfficiencyPlan,
+  formatTokenEfficiencyPlanItem,
+} from '../../services/tokenEfficiency/autoplan.js'
 import type { AppState } from '../../state/AppStateStore.js'
 import type { Tools, ToolUseContext } from '../../Tool.js'
 import type { AgentDefinitionsResult } from '../../tools/AgentTool/loadAgentsDir.js'
@@ -277,13 +281,27 @@ function formatContextAsMarkdownTable(data: ContextData): string {
     output += `\n`
   }
 
-  // Skills
+  // Skills: frontmatter is prompt-resident when Skill is enabled, so show top costs first.
   if (skills && skills.tokens > 0 && skills.skillFrontmatter.length > 0) {
     output += `### Skills\n\n`
+    output += `Showing top ${Math.min(10, skills.skillFrontmatter.length)} of ${skills.skillFrontmatter.length} skill frontmatter entries.\n\n`
     output += `| Skill | Source | Tokens |\n`
     output += `|-------|--------|--------|\n`
-    for (const skill of skills.skillFrontmatter) {
+    const topSkills = [...skills.skillFrontmatter]
+      .sort((a, b) => b.tokens - a.tokens)
+      .slice(0, 10)
+    for (const skill of topSkills) {
       output += `| ${skill.name} | ${getSourceDisplayName(skill.source)} | ${formatTokens(skill.tokens)} |\n`
+    }
+    output += `\n`
+  }
+
+  const tokenEfficiencyPlan = buildTokenEfficiencyPlan(data)
+  if (tokenEfficiencyPlan.length > 0) {
+    output += `### Token Efficiency Autoplan\n\n`
+    output += `Read-only recommendations; no prompt, memory, compact, skill, or refinery settings are changed automatically.\n\n`
+    for (const item of tokenEfficiencyPlan) {
+      output += `- ${formatTokenEfficiencyPlanItem(item)}\n`
     }
     output += `\n`
   }

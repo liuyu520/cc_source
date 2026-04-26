@@ -13,6 +13,10 @@
  * - 不做"裁剪建议" —— 那是 Phase 57 Choreographer 的职责。
  */
 
+import {
+  buildTokenEfficiencyFootprintPlan,
+  formatTokenEfficiencyPlanItem,
+} from '../tokenEfficiency/autoplan.js'
 import type { ContextBudgetAllocation } from '../compact/contextBudget.js'
 
 export type BudgetLedgerEntry = {
@@ -122,6 +126,28 @@ export function getBudgetLedgerSnapshot(): BudgetLedgerSnapshot {
     avgRatio,
     prefetchRate,
   }
+}
+
+/** /cost 用的人类可读 prompt footprint 摘要,无样本时静默不展示。 */
+export function formatBudgetLedgerSummary(): string | null {
+  const snapshot = getBudgetLedgerSnapshot()
+  const latest = snapshot.latest
+  if (!snapshot.enabled || !latest) return null
+  const ratio = (latest.ratio * 100).toFixed(1)
+  const avgRatio = (snapshot.avgRatio * 100).toFixed(1)
+  const prefetchRate = (snapshot.prefetchRate * 100).toFixed(1)
+  const { system, tools, history, output } = latest.sectionTokens
+  const plan = buildTokenEfficiencyFootprintPlan({
+    ratio: latest.ratio,
+    avgRatio: snapshot.avgRatio,
+    prefetchRate: snapshot.prefetchRate,
+    hottestSection: latest.hottestSection,
+    sectionTokens: latest.sectionTokens,
+  })
+  const action = plan
+    ? formatTokenEfficiencyPlanItem(plan)
+    : '[info/prompt-footprint] Prompt footprint is within the current read-only threshold. No action needed.'
+  return `Prompt footprint: latest=${ratio}% avg=${avgRatio}% hottest=${latest.hottestSection} prefetch=${prefetchRate}%\nsections: system=${system}, tools=${tools}, history=${history}, output=${output}\nautoplan: ${action}`
 }
 
 /** 仅供测试/诊断, 生产路径不调用 */

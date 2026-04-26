@@ -989,12 +989,10 @@ export async function analyzeContextUsage(
     agentDefinitions,
   )
   const skillInfo = skillResult.skillInfo
-  // Use sum of individual skill token estimates (matches what's shown in details)
-  // rather than skillResult.skillTokens which includes tool schema overhead
-  const skillFrontmatterTokens = skillInfo.skillFrontmatter.reduce(
-    (sum, skill) => sum + skill.tokens,
-    0,
-  )
+  // Use actual SkillTool definition tokens for the category. Per-skill frontmatter
+  // estimates below remain diagnostic detail only; summing all frontmatter can
+  // over-report when SkillTool prompt listing is budget-truncated.
+  const skillToolTokens = skillResult.skillTokens
 
   const messageTokens = messageBreakdown.totalTokens
 
@@ -1018,7 +1016,7 @@ export async function analyzeContextUsage(
 
   // Built-in tools right after system prompt (skills shown separately below)
   // Ant users get a per-tool breakdown via systemToolDetails
-  const systemToolsTokens = builtInToolTokens - skillFrontmatterTokens
+  const systemToolsTokens = Math.max(0, builtInToolTokens - skillToolTokens)
   if (systemToolsTokens > 0) {
     cats.push({
       name:
@@ -1079,10 +1077,10 @@ export async function analyzeContextUsage(
   }
 
   // Skills after memory files
-  if (skillFrontmatterTokens > 0) {
+  if (skillToolTokens > 0) {
     cats.push({
       name: 'Skills',
-      tokens: skillFrontmatterTokens,
+      tokens: skillToolTokens,
       color: 'warning',
     })
   }
@@ -1366,11 +1364,11 @@ export async function analyzeContextUsage(
           }
         : undefined,
     skills:
-      skillFrontmatterTokens > 0
+      skillToolTokens > 0
         ? {
             totalSkills: skillInfo.totalSkills,
             includedSkills: skillInfo.includedSkills,
-            tokens: skillFrontmatterTokens,
+            tokens: skillToolTokens,
             skillFrontmatter: skillInfo.skillFrontmatter,
           }
         : undefined,

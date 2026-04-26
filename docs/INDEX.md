@@ -12,6 +12,7 @@
 - `codex-chatgpt场景系统性治理方案与修复说明-2026-04-15.md`
 - `codex-major-upgrade-2026-04-14.md`
 - `codex-oauth-prompt-routing-analysis.md`
+- `oauth-codex-token-efficiency-upgrade-2026-04-26.md`
 - `codex-phase0-bugfix-2026-04-14.md`
 - `codex-phase1-5-implementation-2026-04-14.md`
 - `p0_p1_optimization_design.md`

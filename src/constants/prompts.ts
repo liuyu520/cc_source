@@ -473,6 +473,9 @@ If you can say it in one sentence, don't use three. Prefer short, direct sentenc
 const MEMORY_PROMPT_MAX_CHARS = 8_000
 
 function shouldBudgetMemoryPrompt(): boolean {
+  const mode = (process.env.CLAUDE_CODE_MEMORY_PROMPT_BUDGET ?? 'auto').trim().toLowerCase()
+  if (mode === 'off' || mode === '0' || mode === 'false' || mode === 'no') return false
+  if (mode === 'on' || mode === '1' || mode === 'true' || mode === 'yes') return true
   const apiProvider = getAPIProvider()
   // OAuth 代理仍保留 firstParty 完整提示词语义，但 memory 长尾同样需要预算。
   return apiProvider === 'thirdParty' || apiProvider === 'codex' || isOauthProxyBaseUrl()
@@ -482,7 +485,9 @@ async function loadMemoryPromptWithBudget(): Promise<string | null> {
   const raw = await loadMemoryPrompt()
   if (!raw) return null
   const maxCharsEnv = process.env.MEMORY_PROMPT_MAX_CHARS
-  const maxChars = maxCharsEnv !== undefined ? parseInt(maxCharsEnv, 10) : MEMORY_PROMPT_MAX_CHARS
+  const parsedMaxChars = maxCharsEnv !== undefined ? parseInt(maxCharsEnv, 10) : MEMORY_PROMPT_MAX_CHARS
+  // 环境变量误配时回退默认预算,避免 NaN 让 thirdParty/Codex/OAuth proxy 意外失去 memory 保护。
+  const maxChars = Number.isFinite(parsedMaxChars) ? parsedMaxChars : MEMORY_PROMPT_MAX_CHARS
   if (maxChars > 0 && raw.length > maxChars && shouldBudgetMemoryPrompt()) {
     // 截断过长的 memory prompt，保留末尾（包含最新写入的记忆）
     const truncated = raw.slice(-maxChars)

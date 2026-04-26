@@ -210,6 +210,22 @@ export function refineToolResult(
       return { content: mappedContent, refined: false, refinedBytes: 0, reason: 'no-content' }
     }
 
+    // Read/NotebookRead 豁免:文件读取工具返回的是带行号的原始源码,
+    // 一旦被摘要化会丢掉行号锚点与原始缩进,导致下游 Edit 工具无法基于行号
+    // 精确定位;因此默认 short-circuit 不走 refinery(既不做 head/tail 截断,
+    // 也不做 tool-specific summary)。
+    // 若需排查 Read 放大 context 的副作用,可显式设置:
+    //   CLAUDE_EVOLVE_TOOL_REFINERY_READ=on 或 =true 强制打开。
+    {
+      const readKey = toolNameToEnvKey(ctx.toolName)
+      if (readKey === 'READ' || readKey === 'NOTEBOOKREAD') {
+        const override = readEnvLower(`CLAUDE_EVOLVE_TOOL_REFINERY_${readKey}`)
+        if (!isOnValue(override)) {
+          return { content: mappedContent, refined: false, refinedBytes: ctx.originalBytes, reason: 'off-per-tool' }
+        }
+      }
+    }
+
     // 全局开关(最高优先级 short-circuit)
     const globalFlag = readEnvLower('CLAUDE_EVOLVE_TOOL_REFINERY')
     if (isOffValue(globalFlag)) {
