@@ -218,15 +218,21 @@ function safeExists(p: string): boolean {
  *   { at, phase, planPath?, total, matched, mismatched, undetermined, sample, pid }
  *
  * phase:
- *   - 'exit-plan'      — ExitPlanMode 即将 return 时采样
- *   - 'manual'         — 用户 /plan-check 调用(Step 3)
- *   - 'session-end'    — 会话结束重采样(未来)
+ *   - 'exit-plan'          — ExitPlanMode 即将 return 时采样
+ *   - 'exit-plan-feedback' — Step 4 反向 feedback 采样,含 enforceMode+warning 摘要
+ *   - 'manual'             — 用户 /plan-check 调用(Step 3)
+ *   - 'session-end'        — 会话结束重采样(未来)
  *
  * 开关 CLAUDE_PLAN_FIDELITY_LEDGER=off|0|false 关写(默认 on)。
  */
 export function recordPlanFidelitySnapshot(
-  phase: 'exit-plan' | 'manual' | 'session-end',
+  phase:
+    | 'exit-plan'
+    | 'exit-plan-feedback'
+    | 'manual'
+    | 'session-end',
   result: PlanCheckResult,
+  extra?: Record<string, unknown>,
 ): boolean {
   try {
     const raw = (process.env.CLAUDE_PLAN_FIDELITY_LEDGER ?? '')
@@ -256,10 +262,74 @@ export function recordPlanFidelitySnapshot(
       mismatched: result.summary.mismatched,
       undetermined: result.summary.undetermined,
       sample,
+      ...(extra ?? {}),
       pid: process.pid,
     }
     return appendJsonLine(getPlanFidelityLedgerPath(), payload)
   } catch {
     return false
   }
+}
+
+/**
+ * G1 Step 4 (2026-04-26) —— plan-fidelity 反向回写决策辅助。
+ *
+ * 默认 shadow(off):仅写 ledger,不改 tool 输出。
+ * CLAUDE_PLAN_FIDELITY_ENFORCE=warn:在 tool result content 开头 prepend 一段
+ * `⚠️ Plan fidelity warning`(mismatched 摘要),让模型继续任务前看到偏差。
+ * CLAUDE_PLAN_FIDELITY_ENFORCE=block:仍 prepend 警告,同时在 payload 里标记
+ * enforced='block',供后续 UI 层真正阻断(当前阶段与 warn 等价,不主动阻塞)。
+ *
+ * 阈值:mismatched ≥1 才出 warning,避免对纯 undetermined 的 plan 吵。
+ */
+export type PlanFidelityEnforceMode = 'off' | 'warn' | 'block'
+
+export interface PlanFidelityFeedback {
+  enforceMode: PlanFidelityEnforceMode
+  shouldWarn: boolean
+  mismatchedCount: number
+  matchedCount: number
+  totalCount: number
+  warningText?: string
+}
+
+function readEnforceMode(): PlanFidelityEnforceMode {
+  const raw = (process.env.CLAUDE_PLAN_FIDELITY_ENFORCE ?? '')
+    .toString()
+    .trim()
+    .toLowerCase()
+  if (raw === 'warn') return 'warn'
+  if (raw === 'block') return 'block'
+  return 'off'
+}
+
+export function evaluatePlanFidelityFeedback(
+  result: PlanCheckResult,
+): PlanFidelityFeedback {
+  const fb: PlanFidelityFeedback = {
+    enforceMode: readEnforceMode(),
+    shouldWarn: false,
+    mismatchedCount: result.summary.mismatched,
+    matchedCount: result.summary.matched,
+    totalCount: result.summary.total,
+  }
+  if (result.kind !== 'ok') return fb
+  if (fb.mismatchedCount < 1) return fb
+  fb.shouldWarn = fb.enforceMode !== 'off'
+  if (fb.shouldWarn) {
+    // 取最多 5 条 mismatched 详情。
+    const miss = result.items
+      .filter(it => it.kind === 'mismatched')
+      .slice(0, 5)
+      .map(it => {
+        const label = it.path ? `${it.path}` : it.raw.slice(0, 60)
+        return `  - ${label} (${it.detail ?? 'not found'})`
+      })
+      .join('\n')
+    fb.warningText =
+      `⚠️ Plan fidelity warning (${fb.mismatchedCount}/${fb.totalCount} items mismatched):\n` +
+      miss +
+      `\n请在继续前核对 plan 声明的 create/modify 路径是否仍与代码现状一致。`
+  }
+  return fb
 }

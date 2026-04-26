@@ -347,7 +347,11 @@ export function truncateHeadForPTLRetry(
   dropCount = Math.min(dropCount, groups.length - 1)
   if (dropCount < 1) return null
 
-  const sliced = groups.slice(dropCount).flat()
+  // G4 Step 4(2026-04-26)· 用 mutable 变量持有最终 sliced,默认 dropCount 不变;
+  // 若 evaluateCollapseFeedback 在 ENFORCE 模式下返回更低的 suggestedDropCount,
+  // 才重新切片。shadow 模式下 dropCount 不变,此处保持原行为。
+  let effectiveDropCount = dropCount
+  let sliced = groups.slice(dropCount).flat()
 
   // G4 Step 2 (2026-04-26) —— preCollapse 旁路采样。
   //   动机:PTL retry 是本仓唯一自动 drop 消息组的路径,此前 auditCollapseDecision
@@ -355,7 +359,7 @@ export function truncateHeadForPTLRetry(
   //   的时间序列与 dropCount/tokenGap,为后续 Step 3 接 ROI 打底。
   //   纯旁路 + fail-open,绝不影响 PTL retry 主流程。
   try {
-    const { auditCollapseDecision } = require(
+    const { auditCollapseDecision, evaluateCollapseFeedback } = require(
       '../contextCollapse/preCollapseAudit.js',
     ) as typeof import('../contextCollapse/preCollapseAudit.js')
     const victims = groups.slice(0, dropCount).map((g, i) => ({
@@ -366,12 +370,24 @@ export function truncateHeadForPTLRetry(
       contextItemId: `ptl-group:${dropCount + i}`,
       label: `group[${dropCount + i}] (${g.length} msgs)`,
     }))
-    auditCollapseDecision({
+    const auditResult = auditCollapseDecision({
       decisionPoint: 'compact.PTL.truncateHead',
       victims,
       keeps,
       meta: { dropCount, totalGroups: groups.length, tokenGap },
     })
+    // G4 Step 4(2026-04-26)· ROI miss → compact 反向回写。
+    //   · 默认 shadow: 仅写 feedback ledger,effectiveDropCount 不变;
+    //   · CLAUDE_PRECOLLAPSE_ENFORCE=1 时按 suggestedDropCount 重新切片,
+    //     留少一组 victim(对应 high-risk 命中)给下次 compact;
+    //   · fail-open: 任一异常整块 catch,保持原 dropCount 与 sliced。
+    const feedback = evaluateCollapseFeedback(auditResult, dropCount, {
+      meta: { totalGroups: groups.length, tokenGap },
+    })
+    if (feedback.enforced && feedback.suggestedDropCount < dropCount) {
+      effectiveDropCount = feedback.suggestedDropCount
+      sliced = groups.slice(effectiveDropCount).flat()
+    }
   } catch {
     /* observability 层异常不触发回滚 */
   }

@@ -407,6 +407,35 @@ export function generateAdvisories(): Advisory[] {
     }
   } catch { /* best-effort */ }
 
+  // Rule 19(2026-04-26)· Bash filter override advisory(G8 Step 3 收尾闸门)
+  //   数据源:oracle/bash-filter-override.ndjson
+  //           (bashPermissions.maybeAuditBashAllowOverride 旁路)
+  //   与 Rule 15 sandbox.override.* 对称;三档 flip_low/medium/high。
+  //   纯 observational — 不改 Bash 权限决策。
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const bfMod = require('../autoEvolve/oracle/bashFilterOverrideAdvisory.js') as typeof import('../autoEvolve/oracle/bashFilterOverrideAdvisory.js')
+    const adv = bfMod.detectBashFilterOverrideAdvisory()
+    if (adv.kind !== 'none') {
+      const severity: AdvisorySeverity =
+        adv.kind === 'flip_high'
+          ? 'high'
+          : adv.kind === 'flip_medium'
+            ? 'medium'
+            : 'low'
+      advisories.push({
+        severity,
+        ruleId: `bash.filter.override.${adv.kind}`,
+        message:
+          `Bash allow-rule override ${adv.kind}: ${adv.message ?? '(no detail)'}`,
+        suggestedAction:
+          adv.kind === 'flip_low'
+            ? '观察即可,必要时 cat ~/.claude/autoEvolve/oracle/bash-filter-override.ndjson 查看明细'
+            : '复核 userSettings/projectSettings/localSettings 里的 Bash allowRules 是否过宽,必要时收紧 prefix',
+      })
+    }
+  } catch { /* best-effort */ }
+
   // Rule 16(2026-04-26)· Tick budget advisory(G10 Step 2 收尾闸门)
   //   数据源:oracle/tick-budget.ndjson (periodicMaintenance.runTick 旁路)
   //   严格与 Rule 10/11/12/15 对齐:severity 来自 detector,fail-open。

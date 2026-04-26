@@ -848,6 +848,33 @@ export function getAutopilotApplyLedgerPath(): string {
   return join(getOracleDir(), 'autopilot-apply.ndjson')
 }
 
+/**
+ * G8 Step 3(2026-04-26)bashFilter override audit ledger。
+ *
+ *   - 当用户在 userSettings/projectSettings/localSettings/flagSettings 里配的
+ *     allowRule 把本该进 "ask" 的 Bash 命令翻成 "allow" 时,追加一行;
+ *   - 字段: {at, commandPrefix, ruleSource, ruleContent, pid};
+ *   - 同一 process 内对同一 prefix+source 组合只记一次(去抖);
+ *   - fail-open,observational-only,不改权限结果本身;
+ *   - 与 G8 Step 2 sandbox override 对称,由 advisory Rule (symmetric to 15) 消费。
+ */
+export function getBashFilterOverrideLedgerPath(): string {
+  return join(getOracleDir(), 'bash-filter-override.ndjson')
+}
+
+/**
+ * G4 Step 4(2026-04-26)pre-collapse feedback ledger。
+ *   - evaluateCollapseFeedback 每次 compact PTL truncateHead 后追加一行;
+ *   - 字段: {at, decisionPoint, dropCount, suggestedDropCount, highRiskCount, enforced, pid};
+ *   - 与 Step 1-3 的 collapse-audit.ndjson 分文件存:那份是原始 victim risk 快照,
+ *     这份是"feedback 建议"维度(ROI miss → compact 反向回写的建议量);
+ *   - 默认 shadow-only,enforced=false;CLAUDE_PRECOLLAPSE_ENFORCE=1 时才真缩减 dropCount;
+ *   - fail-open,失败不抛。
+ */
+export function getCollapseFeedbackLedgerPath(): string {
+  return join(getOracleDir(), 'collapse-feedback.ndjson')
+}
+
 /** 确保目录存在(幂等,失败静默) */
 export function ensureDir(dir: string): void {
   try {

@@ -58,13 +58,95 @@ export function nextFallbackModel(
   current: string,
   alreadyTried: readonly string[] = [],
   chain: readonly string[] = parseFallbackChain(),
+  opts?: { healthAware?: boolean },
 ): string | undefined {
   if (chain.length === 0) return undefined
   const tried = new Set<string>([current, ...alreadyTried])
-  for (const candidate of chain) {
+  // G5 Step 4(2026-04-26)·可选 health-aware rerank:按 24h fallback 失败计数
+  //   把近期高失败模型下沉到链末,保留 chain 内相对顺序。健康模型优先被选。
+  //   默认 off:Step 3 行为不变(按 parse 顺序)。
+  const ordered = opts?.healthAware ? rankChainByHealth(chain) : chain
+  for (const candidate of ordered) {
     if (!tried.has(candidate)) return candidate
   }
   return undefined
+}
+
+/**
+ * G5 Step 4(2026-04-26)·主开关:判断是否启用 health-aware 重排。
+ *
+ * 默认 off(保持 Step 3 静态顺序)。仅当 ANTHROPIC_FALLBACK_HEALTH_AWARE∈{1,true,on,yes}
+ * 并且 parseFallbackChain() 非空时返回 true。
+ */
+export function isHealthAwareEnabled(
+  rawFlag: string | undefined = process.env.ANTHROPIC_FALLBACK_HEALTH_AWARE,
+  rawChain: string | undefined = process.env.ANTHROPIC_FALLBACK_CHAIN,
+): boolean {
+  if (!rawFlag || typeof rawFlag !== 'string') return false
+  const v = rawFlag.trim().toLowerCase()
+  const enabled = v === '1' || v === 'true' || v === 'on' || v === 'yes'
+  if (!enabled) return false
+  return parseFallbackChain(rawChain).length > 0
+}
+
+/**
+ * G5 Step 4(2026-04-26)·按 24h 窗口统计每个 fallback target 的"不健康度"。
+ *
+ * 语义:score = 该 model 作为 fallbackModel 在窗口内被 record 的次数。
+ *        越高越不健康(说明它自己也抖)。缺失→0(视为健康)。
+ *
+ * 纯读 ndjson;损坏/缺失→空 Map;fail-open,异常吞掉。
+ */
+export function computeModelHealthScores(opts?: {
+  windowHours?: number
+  now?: number
+  maxRows?: number
+}): Map<string, number> {
+  const scores = new Map<string, number>()
+  try {
+    const windowHours = opts?.windowHours ?? 24
+    const anchor = opts?.now ?? Date.now()
+    const maxRows = opts?.maxRows ?? 2000
+    const fs = require('node:fs') as typeof import('node:fs')
+    const path = getApiFallbackLedgerPath()
+    if (!fs.existsSync(path)) return scores
+    const raw = fs.readFileSync(path, 'utf-8')
+    const lines = raw.split('\n').filter(Boolean).slice(-maxRows)
+    const cutoff = anchor - windowHours * 3600 * 1000
+    for (const line of lines) {
+      try {
+        const r = JSON.parse(line)
+        const t = r?.at ? Date.parse(r.at) : NaN
+        if (!Number.isFinite(t) || t < cutoff) continue
+        const m = typeof r.fallbackModel === 'string' ? r.fallbackModel : null
+        if (!m) continue
+        scores.set(m, (scores.get(m) ?? 0) + 1)
+      } catch { /* skip malformed */ }
+    }
+  } catch {
+    // fail-open
+  }
+  return scores
+}
+
+/**
+ * G5 Step 4(2026-04-26)·按 health score 稳定重排 chain。
+ *
+ * 规则:
+ *   - 未出现在 ledger 的 model score=0(视作健康),保持原顺序排前;
+ *   - score>0 的按 score 升序 + 原 index 升序,下沉到末尾(差的更差,排得越后)。
+ *   - 永不从 chain 里剔除任何 candidate(防止过度 rerank 误伤)。
+ */
+export function rankChainByHealth(
+  chain: readonly string[],
+  scores: Map<string, number> = computeModelHealthScores(),
+): string[] {
+  const indexed = chain.map((m, i) => ({ m, i, s: scores.get(m) ?? 0 }))
+  indexed.sort((a, b) => {
+    if (a.s !== b.s) return a.s - b.s
+    return a.i - b.i
+  })
+  return indexed.map(x => x.m)
 }
 
 export interface FallbackEvent {

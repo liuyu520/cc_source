@@ -138,6 +138,12 @@ export const outputSchema = lazySchema(() =>
       .string()
       .optional()
       .describe('Unique identifier for the plan approval request'),
+    planFidelityWarning: z
+      .string()
+      .optional()
+      .describe(
+        'G1 Step 4 feedback: shadow/warn/block 模式下填充,mapToolResultToToolResultBlockParam 会 prepend 到 content 头部',
+      ),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -411,15 +417,29 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
     //   触发。ExitPlanMode 成功是 plan 落盘的自然节点,此时采一次 baseline,
     //   未来 Step 3 session 结束再采一次做 delta,就能量化"计划 → 执行"偏差。
     //   纯旁路 + fail-open,绝不影响 plan 退出主流程。
+    //
+    // G1 Step 4 (2026-04-26) —— ROI 反向回写:若 mismatched≥1 且 ENFORCE=warn|block,
+    //   把 warning 填进 data.planFidelityWarning,供 mapToolResultToToolResultBlockParam
+    //   把警告 prepend 到 tool_result content。默认 off,绝不改 tool_result 输出。
+    let planFidelityWarning: string | undefined
     try {
-      const { checkPlanFidelity, recordPlanFidelitySnapshot } = require(
+      const planMod = require(
         '../../services/planFidelity/artifactChecker.js',
       ) as typeof import('../../services/planFidelity/artifactChecker.js')
-      const result = checkPlanFidelity({
+      const result = planMod.checkPlanFidelity({
         planText: plan ?? undefined,
         planPath: filePath ?? undefined,
       })
-      recordPlanFidelitySnapshot('exit-plan', result)
+      planMod.recordPlanFidelitySnapshot('exit-plan', result)
+      const feedback = planMod.evaluatePlanFidelityFeedback(result)
+      if (feedback.shouldWarn && feedback.warningText) {
+        planFidelityWarning = feedback.warningText
+      }
+      // Step 4 feedback 分相 ledger 行(同文件,phase 区分),便于 advisor 后续消费。
+      planMod.recordPlanFidelitySnapshot('exit-plan-feedback', result, {
+        enforceMode: feedback.enforceMode,
+        shouldWarn: feedback.shouldWarn,
+      })
     } catch {
       /* observability 层异常不触发回滚 */
     }
@@ -431,6 +451,7 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
         filePath,
         hasTaskTool: hasTaskTool || undefined,
         planWasEdited: inputPlan !== undefined || undefined,
+        planFidelityWarning,
       },
     }
   },
@@ -443,6 +464,7 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
       planWasEdited,
       awaitingLeaderApproval,
       requestId,
+      planFidelityWarning,
     },
     toolUseID,
   ) {
@@ -496,9 +518,17 @@ Request ID: ${requestId}`,
       ? 'Approved Plan (edited by user)'
       : 'Approved Plan'
 
+    // G1 Step 4 (2026-04-26) —— 反向回写:若 call() 已把 planFidelityWarning
+    // 填好(ENFORCE=warn|block 且 mismatched≥1),prepend 到 content 头部,
+    // 让模型继续任务前看到 plan↔artifact 偏差摘要。默认 off,warning=undefined,
+    // 原输出完全不变。
+    const fidelityPrefix = planFidelityWarning
+      ? `${planFidelityWarning}\n\n`
+      : ''
+
     return {
       type: 'tool_result',
-      content: `User has approved your plan. You can now start coding. Start with updating your todo list if applicable
+      content: `${fidelityPrefix}User has approved your plan. You can now start coding. Start with updating your todo list if applicable
 
 Your plan has been saved to: ${filePath}
 You can refer back to it if needed during implementation.${teamHint}

@@ -175,6 +175,12 @@ src/services/toolBandit/
   - ghost ON + 真实 `recordToolBanditReward({toolName:'Read', outcome:'error', ...})` → ghost ledger 单行 `recommendedTool=Grep, actualTool=Read, isMatch=false, scoreGap=2`,含两候选完整 score。
 - 下一步(Step 4 留白):advisor Rule 14 `tool.bandit.regret.high`(读 ghost ledger 聚合 isMatch=false 比率)。
 
+**⚠️ 2026-04-26 Step 4 已落地(advisor Rule 14):**
+- 新增 `src/services/autoEvolve/oracle/toolBanditAdvisory.ts`:`computeToolBanditStats` + `detectToolBanditRegret`,24h 窗,只计 `reason='exploit'` 的 row(explore/cold-start-tie 天然 mismatch 不计),阈值 high=rate≥0.5 & gapSum≥5 & exploit≥10,medium=rate≥0.3 & gapSum≥2 & exploit≥5,low=rate>0 & exploit≥3。fail-open。
+- `src/services/contextSignals/advisor.ts` 末尾接入 Rule 14,与 Rule 10/11/12/15/16/17/18 对称:`ruleId=tool.bandit.regret.<kind>`,三档 suggestedAction 指向 /tool-bandit。
+- 真实 smoke:合成 10 exploit(6 mismatch Read→Grep,gap=1.5)+ 4 match + 1 explore ghost ledger + `CLAUDE_CONFIG_DIR` 重定向 → `generateAdvisories()` 精确产出 1 条 `tool.bandit.regret.high`(rate=60%,gap_sum=9.00,last=Read→Grep);阈值拉到不可能值 → none;ledger 缺失 → none。
+- ghost 默认 OFF → 老路径零影响。
+
 ---
 
 ## G4. Context Overflow 缺"死前最后一眼"预测
@@ -256,6 +262,18 @@ ANTHROPIC_FALLBACK_CHAIN=MiniMax-M2.7,MiniMax-M2,claude-opus-4-6
 - 新增 `/skill-candidates [--min-support N] [--min-rate R] [--min-conf C] [--limit N] [--json]` 隐藏命令。
 - **纯只读** —— 不 promote、不写 skill 目录、不改候选文件、不改 procedural mine/promote 阈值。
 - Step 2 (2026-04-26) 已落地(被动→主动推送):在 `/kernel-status` 末尾追加 "Skill-Worthy Candidates (G6)" 摘要段 —— 当 `findSkillWorthyCandidates()` 返回 ≥1 条候选时才打印(零候选静默),展示 count + top `name/support/rate/score` + 指引 `/skill-candidates`+`/evolve-accept`,fail-open。动机:消解用户"不主动敲命令就永远看不到候选"这一真实 pain。CLI boot smoke pass。
+
+**⚠️ 2026-04-26 Step 3 已落地(候选 → shadow organism 显式入口):**
+- 新增 `buildSkillProposalFromCandidate(c)` / `buildSkillProposalsFromCandidates(cs)` 适配器:`SkillWorthyCandidate → PatternCandidate`(kind='skill',id 形如 `pat-<sha8>` 基于 `procedural:<name>:v1` 稳定哈希),rationale 保留 support/rate/conf/score 审计数字。
+- `/skill-candidates --emit [--apply] [--top N]` 扩展:双闸门
+  - 默认 `--emit` 是 dry-run,打印 mapped PatternCandidate[] id/kind/name;
+  - `--apply` 需显式加 + 环境变量 `CLAUDE_SKILL_CANDIDATE_EMIT=on|1|true|yes`,才会真 `compileCandidates(proposals,{overwrite:false})` 落盘 `genome/shadow/<orgId>/`。
+- 真实 smoke(非 mock):合成 `procedural/candidates/pr-ci-commit-push.md`(support=8,rate=0.95,conf=0.8)+ `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` + `CLAUDE_CONFIG_DIR` →
+  - 列表正常;dry-run 输出 `[pat-d3c86312] kind=skill name=pr-ci-commit-push`;
+  - `--apply` 无 env → "refused";带 env → `compiled 1 shadow organism(s): [orgm-1d43304b] ... manifest=.../autoEvolve/genome/shadow/orgm-1d43304b/manifest.json`;
+  - 二次 `--apply`(overwrite:false)→ 仍输出 1 条,未产生新目录。
+- manifest/SKILL.md 真实落盘,origin.sourceFeedbackMemories 回指 candidate md,rationale 保留分数溯源。
+- **不改** findSkillWorthyCandidates 签名 / 阈值 / kernel-status surface;不动 Promotion FSM,shadow → canary → stable 仍走既有 /evolve-tick + 人工 /evolve-accept。
 - probe 23/23 绿;CLI boot smoke pass。
 
 **证据**：

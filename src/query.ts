@@ -1298,14 +1298,19 @@ async function* queryLoop(
             // 启用时:记录已尝试的目标,从链中取下一个候选;无下一候选时把 fallbackModel
             // 置 undefined,下一轮 withRetry 便不再抛 FallbackTriggered,走常规失败路径。
             try {
-              const { isChainingEnabled, nextFallbackModel } = await import(
+              const { isChainingEnabled, nextFallbackModel, isHealthAwareEnabled } = await import(
                 './services/api/fallbackChain.js'
               )
               if (isChainingEnabled()) {
                 fallbackAlreadyTried.push(triggeredFallback)
+                // G5 Step 4(2026-04-26)· 默认 off 时 opts 为空,行为等价 Step 3;
+                //   ANTHROPIC_FALLBACK_HEALTH_AWARE=1 时按 24h fallback 失败计数重排,
+                //   健康模型优先被选,Goodhart 失效时可由环境变量一键回退。
                 const next = nextFallbackModel(
                   triggeredFallback,
                   fallbackAlreadyTried,
+                  undefined,
+                  { healthAware: isHealthAwareEnabled() },
                 )
                 fallbackModel = next // undefined 表示链已耗尽
               }

@@ -22,7 +22,10 @@
  */
 
 import { appendJsonLine } from '../autoEvolve/oracle/ndjsonLedger.js'
-import { getCollapseAuditLedgerPath } from '../autoEvolve/paths.js'
+import {
+  getCollapseAuditLedgerPath,
+  getCollapseFeedbackLedgerPath,
+} from '../autoEvolve/paths.js'
 import {
   getContextItemRoiRow,
   type ContextItemRoiRow,
@@ -227,4 +230,97 @@ export function auditCollapseDecision(
   }
 
   return result
+}
+
+/**
+ * G4 Step 4(2026-04-26)· ROI miss → compact 反向回写。
+ *
+ * 动机:Step 1-3 只观察 + advisory,砍 high-risk 的 victim 已发生。Step 4 把这份
+ * audit 结果用来 **建议下调 dropCount**:若 victim 里含 ≥1 high-risk,说明当前
+ * dropCount 选得太激进,应建议留给下次 compact 处理。
+ *
+ * 默认 shadow-only:仅写 collapse-feedback.ndjson,不改返回值。
+ * CLAUDE_PRECOLLAPSE_ENFORCE=1/true/on 时 `enforced=true`,调用方按
+ * `suggestedDropCount` 执行,留一条实际回写路径。
+ *
+ * 最小 suggestedDropCount = 1(必须至少砍一组,否则 PTL 解不开)。
+ *
+ * fail-open:任何异常返回不变化的默认值(enforced=false, suggested=dropCount)。
+ */
+export interface CollapseFeedback {
+  /** 原 dropCount(入参)。*/
+  originalDropCount: number
+  /** 建议下调到的 dropCount;若无需调整等于 originalDropCount。*/
+  suggestedDropCount: number
+  /** high-risk victim 数量,来自 result.highRiskCount 的本地副本。*/
+  highRiskCount: number
+  /** 是否应当真正落地 suggestedDropCount。默认 false(shadow-only)。*/
+  enforced: boolean
+  /** 本次决策理由。*/
+  reason: string
+}
+
+function isEnforceEnabled(): boolean {
+  const raw = (process.env.CLAUDE_PRECOLLAPSE_ENFORCE ?? '')
+    .toString()
+    .trim()
+    .toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes'
+}
+
+export function evaluateCollapseFeedback(
+  result: CollapseAuditResult,
+  originalDropCount: number,
+  extra?: { meta?: Record<string, unknown> },
+): CollapseFeedback {
+  const fb: CollapseFeedback = {
+    originalDropCount,
+    suggestedDropCount: originalDropCount,
+    highRiskCount: 0,
+    enforced: false,
+    reason: 'no-op',
+  }
+  try {
+    const highRisk = result.highRiskCount | 0
+    fb.highRiskCount = highRisk
+    if (highRisk > 0 && originalDropCount > 1) {
+      // 按 high-risk 数量线性缩减,但至少保留 1 组被 drop。
+      const target = Math.max(1, originalDropCount - highRisk)
+      fb.suggestedDropCount = target
+      fb.reason = `highRisk=${highRisk}, suggest reduce dropCount ${originalDropCount}→${target}`
+    } else if (highRisk > 0 && originalDropCount <= 1) {
+      fb.reason = `highRisk=${highRisk} but dropCount=${originalDropCount} already minimal`
+    } else {
+      fb.reason = 'no high-risk victims'
+    }
+    fb.enforced = fb.suggestedDropCount !== originalDropCount && isEnforceEnabled()
+  } catch (e) {
+    logForDebugging(
+      `[preCollapseAudit] evaluateCollapseFeedback threw: ${(e as Error).message}`,
+    )
+  }
+
+  if (isLedgerEnabled()) {
+    try {
+      appendJsonLine(getCollapseFeedbackLedgerPath(), {
+        at: new Date().toISOString(),
+        decisionPoint: result.decisionPoint,
+        victimCount: result.victimCount,
+        keepCount: result.keepCount,
+        highRiskCount: fb.highRiskCount,
+        originalDropCount: fb.originalDropCount,
+        suggestedDropCount: fb.suggestedDropCount,
+        enforced: fb.enforced,
+        reason: fb.reason,
+        meta: extra?.meta,
+        pid: process.pid,
+      })
+    } catch (e) {
+      logForDebugging(
+        `[preCollapseAudit] feedback ledger append failed: ${(e as Error).message}`,
+      )
+    }
+  }
+
+  return fb
 }

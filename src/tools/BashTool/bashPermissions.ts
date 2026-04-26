@@ -985,6 +985,59 @@ function matchingRulesForInput(
   }
 }
 
+// ── G8 Step 3(2026-04-26)· bashFilter override audit 旁路 ────────────
+//
+//   当 user-config 里配的 allowRule 把本该进 "ask" 的命令翻成 "allow" 时,
+//   往 shadow ledger 追加一行。本函数:
+//     - 纯 side-effect,不改决策;
+//     - fail-open,任何异常都忽略;
+//     - 同一进程内按 "rulePrefix|ruleSource" 去抖,避免 log 洪水;
+//     - 路径走 CLAUDE_CONFIG_DIR,便于 smoke/单测 sandbox。
+//
+//   与 G8 Step 2 sandboxFilter.maybeLogUserOverride 对称。
+const loggedBashAllowOverrides: Set<string> = new Set()
+
+function maybeAuditBashAllowOverride(
+  command: string,
+  rule: PermissionRule,
+): void {
+  try {
+    const ruleContent = rule.ruleValue?.ruleContent ?? '(no-prefix)'
+    const ruleSource = rule.source ?? 'unknown'
+    const key = `${ruleContent}|${ruleSource}`
+    if (loggedBashAllowOverrides.has(key)) return
+    loggedBashAllowOverrides.add(key)
+
+    // require 以避免引入启动时 autoEvolve 的 side-effect
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pathsMod = require(
+      '../../services/autoEvolve/paths.js',
+    ) as typeof import('../../services/autoEvolve/paths.js')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeFs = require('node:fs') as typeof import('node:fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodePath = require('node:path') as typeof import('node:path')
+
+    const ledgerPath = pathsMod.getBashFilterOverrideLedgerPath()
+    const dir = nodePath.dirname(ledgerPath)
+    if (!nodeFs.existsSync(dir)) nodeFs.mkdirSync(dir, { recursive: true })
+    const line =
+      JSON.stringify({
+        at: new Date().toISOString(),
+        commandPrefix: ruleContent,
+        commandSample: command.slice(0, 200),
+        ruleSource,
+        ruleBehavior: rule.ruleBehavior,
+        pid: process.pid,
+      }) + '\n'
+    nodeFs.appendFileSync(ledgerPath, line, 'utf8')
+  } catch (e) {
+    logForDebugging(
+      `[bashFilterOverride] audit write failed: ${(e as Error).message}`,
+    )
+  }
+}
+
 /**
  * Checks if the subcommand is an exact match for a permission rule
  */
@@ -1128,6 +1181,20 @@ export const bashToolCheckPermission = (
 
   // 5. Allow if command has an allow rule
   if (matchingAllowRules[0] !== undefined) {
+    // ── G8 Step 3(2026-04-26)· bashFilter override audit ──
+    //
+    // 如果到这一步,说明:
+    //   - matchingDenyRules / matchingAskRules 都空,否则上面 2a/2b 已 return;
+    //   - 命令本身不是 read-only(否则会走 step 7 返回 read-only allow);
+    //   - 当前这条 allow rule 来自用户配置(userSettings/projectSettings/
+    //     localSettings/flagSettings/policySettings/cliArg/command/session 之一)。
+    //
+    // 等价于:若无此 allow rule,该命令本会进入 step 8 passthrough
+    // (触发权限确认)。这是一个典型的 "ask → allow" flip,与 G8 Step 2
+    // sandboxFilter 中的 user override 对称。
+    //
+    // 只做 side-channel ledger 记录,不改决策结果;fail-open。
+    maybeAuditBashAllowOverride(command, matchingAllowRules[0])
     return {
       behavior: 'allow',
       updatedInput: input,

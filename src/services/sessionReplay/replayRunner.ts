@@ -19,6 +19,12 @@ export interface HistoricalCall {
   historyWasError: boolean | undefined
   /** 对应 tool_result 内容(截断 first item text/string),可空。用于展示历史摘要。 */
   historyPreview: string | undefined
+  /**
+   * G7 P3(2026-04-26)· 原 session line 上的 cwd 字段,来自 jsonl 持久化的
+   * parentUuid/cwd/sessionId 头。replayGlob 缺 input.path 时优先回退到它,
+   * 而不是盲用当前 process.cwd()(可能已切到完全无关的目录)。
+   */
+  sessionCwd?: string
 }
 
 export type ReplayOutcome =
@@ -78,6 +84,12 @@ export function extractReplayableCalls(jsonlPath: string): HistoricalCall[] {
     const content = msg?.content
     if (!Array.isArray(content)) continue
 
+    // G7 P3(2026-04-26):session jsonl 每行通常带顶层 cwd 字段(assistant 行尤其如此)。
+    // 抓取它作为 per-call 的 sessionCwd,供 replayGlob 在 input.path 缺失时回退,
+    // 避免盲用当前 process.cwd() 带来的跨目录 drift 误报。
+    const sessionCwdForLine =
+      typeof obj?.cwd === 'string' && obj.cwd ? obj.cwd : undefined
+
     for (const part of content) {
       if (!part || typeof part !== 'object') continue
       const t = (part as any).type
@@ -93,6 +105,7 @@ export function extractReplayableCalls(jsonlPath: string): HistoricalCall[] {
           input: input && typeof input === 'object' ? { ...input } : {},
           historyWasError: undefined,
           historyPreview: undefined,
+          sessionCwd: sessionCwdForLine,
         }
         pendingByTid.set(id, hc)
         calls.push(hc)
@@ -103,14 +116,22 @@ export function extractReplayableCalls(jsonlPath: string): HistoricalCall[] {
         if (!hc) continue
         hc.historyWasError = (part as any).is_error === true
         const body = (part as any).content
+        // G7 P3(2026-04-26):tool_result.content 可能是 multi-part。
+        // Bash + image attachment 等场景常在 body[1..] 附额外文本,
+        // 旧版本只取 body[0] 会丢信息。这里把所有 text 段拼接后再截 120 字。
         if (typeof body === 'string') {
           hc.historyPreview = body.slice(0, 120)
         } else if (Array.isArray(body) && body.length > 0) {
-          const b0 = body[0]
-          if (b0 && typeof b0 === 'object') {
-            const txt = typeof (b0 as any).text === 'string' ? (b0 as any).text : ''
-            hc.historyPreview = txt.slice(0, 120)
+          const parts: string[] = []
+          for (const seg of body) {
+            if (seg && typeof seg === 'object') {
+              const txt = (seg as any).text
+              if (typeof txt === 'string' && txt.length > 0) parts.push(txt)
+            } else if (typeof seg === 'string') {
+              parts.push(seg)
+            }
           }
+          hc.historyPreview = parts.join('\n').slice(0, 120)
         }
       }
     }
@@ -157,9 +178,21 @@ function replayRead(input: Record<string, unknown>): { outcome: ReplayOutcome; d
 // Glob 重放:在指定 path 下展开 pattern(简单前缀+后缀匹配,不接 micromatch 避免依赖)
 // 这里不追求完全等价,只核对"是否还有命中"——没命中 = drift(可能 refactor 掉),
 // 命中数量和历史摘要不比(refinery 包装使逐字节对比不可靠)。
-function replayGlob(input: Record<string, unknown>): { outcome: ReplayOutcome; detail: string } {
+function replayGlob(
+  input: Record<string, unknown>,
+  sessionCwd?: string,
+): { outcome: ReplayOutcome; detail: string } {
   const pattern = typeof input.pattern === 'string' ? input.pattern : ''
-  const root = typeof input.path === 'string' && input.path ? input.path : process.cwd()
+  // G7 P3(2026-04-26)· cwd fallback 顺序:
+  //   1. input.path(tool 显式传入)
+  //   2. sessionCwd(原 session jsonl 里这条记录旁的 cwd,和当初执行时一致)
+  //   3. process.cwd()(兜底;可能已 drift,但不硬失败)
+  const root =
+    typeof input.path === 'string' && input.path
+      ? input.path
+      : sessionCwd && typeof sessionCwd === 'string' && sessionCwd
+        ? sessionCwd
+        : process.cwd()
   if (!pattern) return { outcome: 'error', detail: 'pattern 缺失' }
   try {
     if (!existsSync(root)) {
@@ -260,7 +293,7 @@ export function replayCall(call: HistoricalCall): ReplayRow {
       return { call, outcome: r.outcome, detail: r.detail }
     }
     case 'Glob': {
-      const r = replayGlob(call.input)
+      const r = replayGlob(call.input, call.sessionCwd)
       return { call, outcome: r.outcome, detail: r.detail }
     }
     case 'LS': {

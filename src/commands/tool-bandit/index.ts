@@ -245,6 +245,40 @@ function call(args: string): LocalCommandCall {
       )
     }
   }
+
+  // ── G3 Step 4(2026-04-26)· Rule 14 regret advisory 摘要 ────────────
+  //
+  //   消费 ghost ledger(policy.ts 里 ε-greedy 的旁路记录)。
+  //   只统计 reason='exploit' 的行;命中 exploit 却与 policy 推荐分歧时,
+  //   按 rate + gapSum 三档告警(与 advisor.ts Rule 14 共享 detector)。
+  //   无 ghost ledger / 无 exploit 样本时静默(kind='none')。
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const tbMod = require(
+      '../../services/autoEvolve/oracle/toolBanditAdvisory.js',
+    ) as typeof import('../../services/autoEvolve/oracle/toolBanditAdvisory.js')
+    const adv = tbMod.detectToolBanditRegret({ windowHours: parsed.window })
+    lines.push('')
+    lines.push(`--- regret advisory (${adv.windowLabel}) ---`)
+    if (adv.kind === 'none') {
+      lines.push(
+        `  kind=none  exploit=${adv.stats.exploitRows}  mismatch=${adv.stats.mismatchRows}  ` +
+          `(not enough exploit samples or no divergence)`,
+      )
+    } else {
+      lines.push(
+        `  kind=${adv.kind}  severity=${adv.severity}  ` +
+          `exploit=${adv.stats.exploitRows}  mismatch=${adv.stats.mismatchRows}  ` +
+          `rate=${(adv.stats.mismatchRate * 100).toFixed(1)}%  ` +
+          `gapSum=${adv.stats.scoreGapSum.toFixed(2)}`,
+      )
+      if (adv.message) lines.push(`  ${adv.message}`)
+    }
+  } catch (e) {
+    lines.push('')
+    lines.push(`--- regret advisory --- (failed: ${(e as Error).message})`)
+  }
+
   lines.push('')
   lines.push('Note: shadow-only reward ledger — no bandit policy is consuming this yet. See docs §G3.')
   return { type: 'text', value: lines.join('\n') }

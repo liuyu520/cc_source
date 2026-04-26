@@ -20,6 +20,15 @@ const USAGE = `Usage:
   /skill-candidates --min-conf C          confidence >= C (0..1, default 0.6)
   /skill-candidates --limit N             cap output rows (1..200, default 20)
   /skill-candidates --json                emit JSON
+  /skill-candidates --emit [--apply] [--top N]
+                                          G6 Step 3: turn qualifying candidates
+                                          into shadow organism proposals
+                                          (default dry-run prints mapped
+                                          PatternCandidate[]);
+                                          --apply needs env
+                                          CLAUDE_SKILL_CANDIDATE_EMIT=on and
+                                          compiles top N (1..50, default 3) to
+                                          genome/shadow/.
   /skill-candidates --help                this message
 `
 
@@ -30,6 +39,9 @@ interface ParsedFlags {
   limit: number
   json: boolean
   help: boolean
+  emit: boolean
+  apply: boolean
+  top: number
   error?: string
 }
 
@@ -41,6 +53,9 @@ function parseFlags(args: string): ParsedFlags {
   let limit = 20
   let json = false
   let help = false
+  let emit = false
+  let apply = false
+  let top = 3
 
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!
@@ -63,6 +78,9 @@ function parseFlags(args: string): ParsedFlags {
           limit,
           json,
           help,
+          emit,
+          apply,
+          top,
           error: `--min-support must be 1..1000\n${USAGE}`,
         }
       }
@@ -80,6 +98,9 @@ function parseFlags(args: string): ParsedFlags {
           limit,
           json,
           help,
+          emit,
+          apply,
+          top,
           error: `--min-rate must be 0..1\n${USAGE}`,
         }
       }
@@ -97,6 +118,9 @@ function parseFlags(args: string): ParsedFlags {
           limit,
           json,
           help,
+          emit,
+          apply,
+          top,
           error: `--min-conf must be 0..1\n${USAGE}`,
         }
       }
@@ -114,10 +138,41 @@ function parseFlags(args: string): ParsedFlags {
           limit,
           json,
           help,
+          emit,
+          apply,
+          top,
           error: `--limit must be 1..200\n${USAGE}`,
         }
       }
       limit = n
+      continue
+    }
+    if (t === '--emit') {
+      emit = true
+      continue
+    }
+    if (t === '--apply') {
+      apply = true
+      continue
+    }
+    if (t === '--top') {
+      const next = tokens[++i]
+      const n = next ? parseInt(next, 10) : NaN
+      if (!Number.isFinite(n) || n < 1 || n > 50) {
+        return {
+          minSupport,
+          minRate,
+          minConf,
+          limit,
+          json,
+          help,
+          emit,
+          apply,
+          top,
+          error: `--top must be 1..50\n${USAGE}`,
+        }
+      }
+      top = n
       continue
     }
     return {
@@ -127,10 +182,13 @@ function parseFlags(args: string): ParsedFlags {
       limit,
       json,
       help,
+      emit,
+      apply,
+      top,
       error: `unknown flag: ${t}\n${USAGE}`,
     }
   }
-  return { minSupport, minRate, minConf, limit, json, help }
+  return { minSupport, minRate, minConf, limit, json, help, emit, apply, top }
 }
 
 function call(args: string): LocalCommandCall {
@@ -190,6 +248,73 @@ function call(args: string): LocalCommandCall {
   lines.push(
     'Note: read-only — no auto-promote. See docs §G6 for planned Step 2 (reuse-rate closure).',
   )
+
+  // ── G6 Step 3(2026-04-26)· shadow 自动接管的显式入口 ────────────
+  //
+  //   /skill-candidates --emit              dry-run,列出 mapped PatternCandidate[]
+  //   /skill-candidates --emit --apply      真正 compile 到 genome/shadow
+  //
+  //   双闸门:
+  //     1. --apply 必须显式输入(缺省就是 dry-run)
+  //     2. 环境变量 CLAUDE_SKILL_CANDIDATE_EMIT 必须为 on/1/true/yes
+  //        (避免 CI/自动化脚本里误跑)
+  //
+  //   未通过 --emit 时,该段不输出任何内容,维持原 Step 2 读-only 行为。
+  if (parsed.emit) {
+    lines.push('')
+    lines.push(`--- emit (top ${parsed.top}) ---`)
+    if (rows.length === 0) {
+      lines.push('(no eligible candidates — nothing to emit)')
+      return { type: 'text', value: lines.join('\n') }
+    }
+    const { buildSkillProposalsFromCandidates } = require(
+      '../../services/proceduralMemory/skillCandidateMiner.js',
+    ) as typeof import('../../services/proceduralMemory/skillCandidateMiner.js')
+    const proposals = buildSkillProposalsFromCandidates(
+      rows.slice(0, parsed.top),
+    )
+    lines.push(`prepared ${proposals.length} proposal(s):`)
+    for (const p of proposals) {
+      lines.push(
+        `  [${p.id}] kind=${p.suggestedRemediation.kind} name=${p.suggestedRemediation.nameSuggestion}`,
+      )
+    }
+
+    const envRaw = (process.env.CLAUDE_SKILL_CANDIDATE_EMIT ?? '')
+      .trim()
+      .toLowerCase()
+    const envOn = envRaw === 'on' || envRaw === '1' || envRaw === 'true' || envRaw === 'yes'
+    if (!parsed.apply) {
+      lines.push('')
+      lines.push('dry-run — pass --apply and set CLAUDE_SKILL_CANDIDATE_EMIT=on to compile.')
+      return { type: 'text', value: lines.join('\n') }
+    }
+    if (!envOn) {
+      lines.push('')
+      lines.push(
+        '--apply refused: CLAUDE_SKILL_CANDIDATE_EMIT is not on (set to on/1/true/yes).',
+      )
+      return { type: 'text', value: lines.join('\n') }
+    }
+    try {
+      const { compileCandidates } = require(
+        '../../services/autoEvolve/emergence/skillCompiler.js',
+      ) as typeof import('../../services/autoEvolve/emergence/skillCompiler.js')
+      // overwrite:false —— 重复 emit 不覆盖已有 shadow,交给 Promotion FSM 演化
+      const results = compileCandidates(proposals, { overwrite: false })
+      lines.push('')
+      lines.push(`compiled ${results.length} shadow organism(s):`)
+      for (const r of results) {
+        lines.push(
+          `  [${r.manifest.id}] status=${r.manifest.status} kind=${r.manifest.kind} name=${r.manifest.name}\n     manifest=${r.manifestPath}`,
+        )
+      }
+    } catch (e) {
+      lines.push('')
+      lines.push(`compile failed: ${(e as Error).message}`)
+    }
+  }
+
   return { type: 'text', value: lines.join('\n') }
 }
 
