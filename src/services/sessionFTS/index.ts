@@ -1,0 +1,5 @@
+export { getDb, closeDb, isSessionFTSEnabled } from './db.js'
+export { indexSession, indexSessionsBatch, removeSessionFromIndex } from './indexer.js'
+export type { SessionRecord } from './indexer.js'
+export { searchSessionsFTS, getIndexedSessionCount } from './search.js'
+export type { FTSSearchResult } from './search.js'

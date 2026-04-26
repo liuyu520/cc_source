@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tool Middleware Reuse"
+  short_description: "Reuse shared tool execution middleware"
+  default_prompt: "Use $tool-middleware-pipeline-reuse to extend shared tool execution middleware, metrics, caching, concurrency, or audit logging without bypassing the canonical execution chain."

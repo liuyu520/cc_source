@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Phase 108(2026-04-24)— Advisory Contract pre-commit hook
+#
+# Why:
+#   Ph92/95/96 给出了三层 drift detection,scripts/check-advisory-contract.ts
+#   用来人工调。但真正的"忘了同步"大多发生在提交前一刻 —— pre-commit 是
+#   最后一道可以拦住静态 drift 的护栏(Layer 1 declaration↔contract)。
+#
+# Design:
+#   - 路径过滤:仅当 staged 文件触及 advisor.ts / advisoryContract.ts /
+#     patternMiner.ts 时才跑,避免给无关提交加税。
+#   - 调用 `bun run check:contract`,退出码 1 → fail 提交并打印 remediation
+#     提示;退出码 2 → 脚本自身出错,也 fail(保守);退出码 0 → 放行。
+#   - 退路:两种方式都可绕过
+#       1. git commit --no-verify        (git 原生)
+#       2. SKIP_ADVISORY_CONTRACT=1      (hook 自己识别,便于 CI 环境)
+#   - 静默通过:不给无异常的提交添加 noise(只在触发/失败时输出)。
+#
+# Install:
+#   bun run install:hooks
+#   或手工:ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+# NOT installed by default:
+#   这个文件本身是仓库里的模板,不会影响未安装的用户。
+set -euo pipefail
+
+# 退路 1:环境变量跳过
+if [[ "${SKIP_ADVISORY_CONTRACT:-}" = "1" ]]; then
+  exit 0
+fi
+
+# 三个契约参与方的文件路径(与 check-advisory-contract.ts 注释里列的一致)
+CONTRACT_FILES=(
+  "src/services/autoEvolve/emergence/advisor.ts"
+  "src/services/autoEvolve/emergence/advisoryContract.ts"
+  "src/services/autoEvolve/emergence/patternMiner.ts"
+)
+
+# 拿到本次提交暂存的文件清单(ACMR = added/copied/modified/renamed,忽略删除)
+changed=$(git diff --cached --name-only --diff-filter=ACMR || true)
+if [[ -z "$changed" ]]; then
+  exit 0
+fi
+
+# 判断是否触及契约文件
+hit=0
+for f in "${CONTRACT_FILES[@]}"; do
+  if echo "$changed" | grep -qx "$f"; then
+    hit=1
+    break
+  fi
+done
+if [[ "$hit" = "0" ]]; then
+  exit 0
+fi
+
+echo "[pre-commit/ph108] advisory contract file changed → running check:contract"
+
+# 调 bun;注意 bun 的退出码:
+#   0 = all clean  → 放行
+#   1 = drift 检出 → 拦住
+#   2 = 脚本错误   → 拦住(保守:宁可人工介入,也不放行可疑提交)
+if ! bun run check:contract; then
+  code=$?
+  echo ""
+  echo "[pre-commit/ph108] advisory contract check FAILED (exit=$code)"
+  echo ""
+  echo "Remediation:"
+  echo "  1. 运行 /evolve-status 看 Advisory Funnel 段的 'Suggested additions'"
+  echo "  2. 或查看哪层 drift:"
+  echo "     - L1 (Ph95):declaration ↔ contract 字面不一致"
+  echo "     - L2 (Ph92):ring 里有 ruleId 但 contract 没映射"
+  echo "     - L3 (Ph96):ring 里有 category 但 declaration 没声明"
+  echo "  3. 确认无法修复时,临时绕过:"
+  echo "     SKIP_ADVISORY_CONTRACT=1 git commit ...   # 一次性"
+  echo "     git commit --no-verify                    # 通用 git 退路"
+  exit 1
+fi
+
+exit 0
