@@ -44,7 +44,7 @@ import {
   getScratchpadDir,
 } from '../utils/permissions/filesystem.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
-import { getAPIProvider } from '../utils/model/providers.js'
+import { getAPIProvider, isOauthProxyBaseUrl } from '../utils/model/providers.js'
 import { isReplModeEnabled } from '../tools/REPLTool/constants.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
@@ -468,16 +468,22 @@ Focus text output on:
 If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls.`
 }
 
-// Memory prompt 大小预算：第三方 API 限制为 ~2000 tokens（8000 chars）以节省开销。
+// Memory prompt 大小预算：第三方/Codex/OAuth 代理限制为 ~2000 tokens（8000 chars）以节省开销。
 // 可通过 MEMORY_PROMPT_MAX_CHARS 环境变量覆盖，设 0 则不限制。
 const MEMORY_PROMPT_MAX_CHARS = 8_000
+
+function shouldBudgetMemoryPrompt(): boolean {
+  const apiProvider = getAPIProvider()
+  // OAuth 代理仍保留 firstParty 完整提示词语义，但 memory 长尾同样需要预算。
+  return apiProvider === 'thirdParty' || apiProvider === 'codex' || isOauthProxyBaseUrl()
+}
 
 async function loadMemoryPromptWithBudget(): Promise<string | null> {
   const raw = await loadMemoryPrompt()
   if (!raw) return null
   const maxCharsEnv = process.env.MEMORY_PROMPT_MAX_CHARS
   const maxChars = maxCharsEnv !== undefined ? parseInt(maxCharsEnv, 10) : MEMORY_PROMPT_MAX_CHARS
-  if (maxChars > 0 && raw.length > maxChars && getAPIProvider() === 'thirdParty') {
+  if (maxChars > 0 && raw.length > maxChars && shouldBudgetMemoryPrompt()) {
     // 截断过长的 memory prompt，保留末尾（包含最新写入的记忆）
     const truncated = raw.slice(-maxChars)
     const firstNewline = truncated.indexOf('\n')
@@ -504,6 +510,16 @@ function getThirdPartySystemPrompt(): string {
 - Be concise. Use GitHub-flavored markdown.
 - Prefer editing existing files over creating new ones.
 - Match surrounding code style exactly.`
+}
+
+function getCodexSystemPrompt(): string {
+  return `${getThirdPartySystemPrompt()}
+
+# Codex provider
+- You are running through the Codex/OpenAI Responses API adapter, not the native Anthropic API.
+- Keep tool calls conservative and schema-faithful; do not invent unsupported tool parameters.
+- Do not guess OAuth/login state. If credentials or browser authorization are required, ask the user to run the real auth command.
+- Avoid Anthropic-internal assumptions unless they are present in the current repository or prompt context.`
 }
 
 async function getCodexModelDescription(): Promise<string> {
@@ -540,17 +556,20 @@ export async function getSystemPrompt(
     ]
   }
 
-  // 第三方 API 使用精简系统提示：保留核心功能指导，去除 Anthropic-specific 内容。
-  // 但 Codex 场景必须复用完整的 Claude OAuth 风格提示词，保持与 Claude OAuth 授权模式一致。
+  // 第三方/Codex API 使用精简系统提示：保留核心编码助手功能，去除低收益常驻说明。
+  // OAuth 代理仍由 getAPIProvider() 归为 firstParty，默认保留完整 Claude OAuth 语义。
   // 可通过 CLAUDE_CODE_FULL_SYSTEM_PROMPT=1 强制使用完整系统提示。
   const apiProvider = getAPIProvider()
-  if (apiProvider === 'thirdParty' && !isEnvTruthy(process.env.CLAUDE_CODE_FULL_SYSTEM_PROMPT)) {
+  if (
+    (apiProvider === 'thirdParty' || apiProvider === 'codex') &&
+    !isEnvTruthy(process.env.CLAUDE_CODE_FULL_SYSTEM_PROMPT)
+  ) {
     const [envInfo] = await Promise.all([
       computeSimpleEnvInfo(model, additionalWorkingDirectories),
     ])
     const memoryPrompt = await loadMemoryPromptWithBudget()
     return [
-      getThirdPartySystemPrompt(),
+      apiProvider === 'codex' ? getCodexSystemPrompt() : getThirdPartySystemPrompt(),
       envInfo,
       ...(memoryPrompt ? [memoryPrompt] : []),
     ].filter(Boolean) as string[]
