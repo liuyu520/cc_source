@@ -210,6 +210,12 @@ export function refineToolResult(
       return { content: mappedContent, refined: false, refinedBytes: 0, reason: 'no-content' }
     }
 
+    // 全局开关(最高优先级 short-circuit)
+    const globalFlag = readEnvLower('CLAUDE_EVOLVE_TOOL_REFINERY')
+    if (isOffValue(globalFlag)) {
+      return { content: mappedContent, refined: false, refinedBytes: ctx.originalBytes, reason: 'off-global' }
+    }
+
     // Read/NotebookRead 豁免:文件读取工具返回的是带行号的原始源码,
     // 一旦被摘要化会丢掉行号锚点与原始缩进,导致下游 Edit 工具无法基于行号
     // 精确定位;因此默认 short-circuit 不走 refinery(既不做 head/tail 截断,
@@ -224,12 +230,6 @@ export function refineToolResult(
           return { content: mappedContent, refined: false, refinedBytes: ctx.originalBytes, reason: 'off-per-tool' }
         }
       }
-    }
-
-    // 全局开关(最高优先级 short-circuit)
-    const globalFlag = readEnvLower('CLAUDE_EVOLVE_TOOL_REFINERY')
-    if (isOffValue(globalFlag)) {
-      return { content: mappedContent, refined: false, refinedBytes: ctx.originalBytes, reason: 'off-global' }
     }
 
     // 单 tool 开关 —— 覆盖默认打开行为, 但不覆盖全局 off(全局已经 short-circuit)
