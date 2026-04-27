@@ -52,7 +52,7 @@ claude
 
 ```bash
 # ~/.claude/settings.json 中有:
-#   "env": { "ANTHROPIC_BASE_URL": "http://43.135.170.102:8002/api/v1/proxy/anthropic" }
+#   "env": { "ANTHROPIC_BASE_URL": "http://proxy.example.com:8002/api/v1/proxy/anthropic" }
 
 # shell 中设置 API Key → 自动触发 CLAUDE_API_MODE
 export ANTHROPIC_API_KEY="your-minimax-key"

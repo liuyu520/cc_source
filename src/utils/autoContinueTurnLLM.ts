@@ -40,11 +40,13 @@ import { isEnvTruthy } from './envUtils.js'
 export const AUTO_CONTINUE_LLM_DEFAULT_BASE_URL =
   'https://coding.dashscope.aliyuncs.com/apps/anthropic'
 
-/** 默认 API key —— 可被 CLAUDE_AUTO_CONTINUE_LLM_API_KEY 覆盖。
- *  注: 这是用户配置的团队共享 key,不是机密 —— 保留在源码便于默认即开即用。
- *  若需要切换,设置 env var 或 CLAUDE_AUTO_CONTINUE_LLM_API_KEY=sk-xxxxx 即可。 */
+/** 默认 API key —— **占位符**。必须由 CLAUDE_AUTO_CONTINUE_LLM_API_KEY 覆盖。
+ *  注: 早期版本曾把真实团队共享 key 直接硬编码在这里,已于安全审计后改为占位符。
+ *  要启用 LLM 兜底路径,请设置 env var:
+ *    export CLAUDE_AUTO_CONTINUE_LLM_API_KEY=sk-xxxxxxxx
+ *  未覆盖时请求会收到 401,LLM 路径会静默 degrade 到正则路径(见 detectNextStepIntentViaLLM)。 */
 export const AUTO_CONTINUE_LLM_DEFAULT_API_KEY =
-  'sk-sp-7adc0360970c48adb2460e58664a5392'
+  'sk-sp-PLEASE-SET-CLAUDE_AUTO_CONTINUE_LLM_API_KEY'
 
 /** 默认模型 —— DashScope `apps/anthropic` 网关目前主要提供 qwen3-coder-plus(分类任务足够)。
  *  若用户改用其他网关,可通过 CLAUDE_AUTO_CONTINUE_LLM_MODEL 覆盖为 claude-haiku-4-5 等。 */
