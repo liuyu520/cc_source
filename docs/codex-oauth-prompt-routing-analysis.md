@@ -389,7 +389,7 @@ bun run version
 结果正常：
 
 ```bash
-260414.0.6-hanjun (Claude Code)
+260414.0.7-hanjun (Claude Code)
 ```
 
 说明本次改动没有破坏 CLI 基本启动路径。

@@ -18,6 +18,11 @@ type Props = {
   stalledIntensity?: number;
   reducedMotion?: boolean;
   time?: number;
+  // A3: long-running breathing. 父组件传原始 elapsedTimeMs。超过 60s 时
+  // 常态分支按 3s 周期做 opacity 0.6→1.0 的正弦呼吸,帮助长任务"还在跑"
+  // 的信号更容易被余光捕捉。stalled 态优先(红已够醒目,不叠加);
+  // reducedMotion 禁用(无障碍)。<=60s 时不生效,所以短请求视觉不变。
+  elapsedTimeMs?: number;
 };
 export function SpinnerGlyph(t0) {
   const $ = _c(9);
@@ -26,11 +31,13 @@ export function SpinnerGlyph(t0) {
     messageColor,
     stalledIntensity: t1,
     reducedMotion: t2,
-    time: t3
+    time: t3,
+    elapsedTimeMs: t3e
   } = t0;
   const stalledIntensity = t1 === undefined ? 0 : t1;
   const reducedMotion = t2 === undefined ? false : t2;
   const time = t3 === undefined ? 0 : t3;
+  const elapsedTimeMs = t3e === undefined ? 0 : t3e;
   const [themeName] = useTheme();
   const theme = getTheme(themeName);
   if (reducedMotion) {
@@ -47,17 +54,20 @@ export function SpinnerGlyph(t0) {
     return t4;
   }
   const spinnerChar = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+  // A1: spinner glyph 加粗,让"在跑"与 transcript 暗字文本在视觉权重上区分开。
+  // Braille 点阵字符加 bold 在主流终端(iTerm2/kitty/Ghostty/Alacritty/VS Code/
+  // Windows Terminal)全部单字宽稳定,不会撑破 <Box width={2}>。
   if (stalledIntensity > 0) {
     const baseColorStr = theme[messageColor];
     const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null;
     if (baseRGB) {
       const interpolated = interpolateColor(baseRGB, ERROR_RED, stalledIntensity);
-      return <Box flexWrap="wrap" height={1} width={2}><Text color={toRGBColor(interpolated)}>{spinnerChar}</Text></Box>;
+      return <Box flexWrap="wrap" height={1} width={2}><Text bold color={toRGBColor(interpolated)}>{spinnerChar}</Text></Box>;
     }
     const color = stalledIntensity > 0.5 ? "error" : messageColor;
     let t4;
     if ($[3] !== color || $[4] !== spinnerChar) {
-      t4 = <Box flexWrap="wrap" height={1} width={2}><Text color={color}>{spinnerChar}</Text></Box>;
+      t4 = <Box flexWrap="wrap" height={1} width={2}><Text bold color={color}>{spinnerChar}</Text></Box>;
       $[3] = color;
       $[4] = spinnerChar;
       $[5] = t4;
@@ -67,8 +77,27 @@ export function SpinnerGlyph(t0) {
     return t4;
   }
   let t4;
+  // A3: 长任务呼吸。>60s 且 RGB 可解析时,按 3s 周期做 0.6→1.0 正弦呼吸。
+  // 与 $[6..8] 的 (messageColor, spinnerChar) memo 并存:呼吸分支每帧 time
+  // 变化,不能走 memo,走独立构造路径。短任务/ANSI 主题保持原 memo 快路径。
+  const LONG_RUNNING_THRESHOLD_MS = 60_000;
+  const BREATHING_PERIOD_MS = 3_000;
+  const BREATHING_MIN_OPACITY = 0.6;
+  if (elapsedTimeMs > LONG_RUNNING_THRESHOLD_MS) {
+    const baseColorStr_b = theme[messageColor];
+    const baseRGB_b = baseColorStr_b ? parseRGB(baseColorStr_b) : null;
+    if (baseRGB_b) {
+      // sin ∈ [-1,1] → [0,1] → [MIN, 1.0]
+      const sin01 = (Math.sin(time / BREATHING_PERIOD_MS * Math.PI * 2) + 1) / 2;
+      const opacity = BREATHING_MIN_OPACITY + (1 - BREATHING_MIN_OPACITY) * sin01;
+      // 与"黑背景"(0,0,0)做 lerp,opacity=1 时不变,opacity=MIN 时最暗。
+      const dimmed = { r: Math.round(baseRGB_b.r * opacity), g: Math.round(baseRGB_b.g * opacity), b: Math.round(baseRGB_b.b * opacity) };
+      return <Box flexWrap="wrap" height={1} width={2}><Text bold color={toRGBColor(dimmed)}>{spinnerChar}</Text></Box>;
+    }
+    // ANSI 主题无法做 opacity lerp,fall-through 到 memo 快路径。
+  }
   if ($[6] !== messageColor || $[7] !== spinnerChar) {
-    t4 = <Box flexWrap="wrap" height={1} width={2}><Text color={messageColor}>{spinnerChar}</Text></Box>;
+    t4 = <Box flexWrap="wrap" height={1} width={2}><Text bold color={messageColor}>{spinnerChar}</Text></Box>;
     $[6] = messageColor;
     $[7] = spinnerChar;
     $[8] = t4;

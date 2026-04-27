@@ -157,6 +157,7 @@ export async function recordLesson(lesson: Lesson): Promise<void> {
 
 ## 相关 Skill
 
+- [source-code-secret-audit.md](source-code-secret-audit.md) —— **静态对偶**:源代码里的硬编码 key / 内网 IP 审计,本 skill 管运行时,那条 skill 管 git 提交前
 - [hook-unit-testability-env-gate.md](hook-unit-testability-env-gate.md) —— `CLAUDE_HOOKS_LESSONS_DISABLE` 的用法
 - [edit-hook-diff-aware-detection.md](edit-hook-diff-aware-detection.md) —— 检测到硬编码密钥后,才决定要不要告警
 - [memory-lifecycle-patterns.md](memory-lifecycle-patterns.md) —— memory 文件生命周期,脱敏是其中的一环

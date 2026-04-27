@@ -21,7 +21,7 @@
 | **不影响主 rate limit** | 副路调用频率高(每轮都可能跑),挤占主配额会拖慢对话 |
 | **不静默占内存** | SDK 实例要按配置 key 缓存单例,不要每次请求都 new |
 | **不抛错冒泡** | 副路任何失败一律 degrade,不连累主流程 |
-| **不硬编码敏感值** | 默认常量只能是团队共享或公开 key,真正机密走 env 覆盖 |
+| **不硬编码敏感值** | 默认常量**必须是占位符**(如 `sk-sp-PLEASE-SET-CLAUDE_XXX_API_KEY`),真 key 只走 env。"团队共享 key"也是机密,不是免罪符 —— 详见 [source-code-secret-audit.md](source-code-secret-audit.md) |
 
 ## 骨架代码
 
@@ -32,8 +32,9 @@
 
 /** 默认网关(团队共享,可被 env 覆盖) */
 export const DEFAULT_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
-/** 默认 key —— 非机密、团队共享。机密走 env。 */
-export const DEFAULT_API_KEY = 'sk-sp-xxxxxxxx'
+/** 默认 key —— **占位符**,必须由 env 覆盖。
+ *  ⚠️ 不要在这里写真 key,即使是"团队共享"的。详见 source-code-secret-audit.md。 */
+export const DEFAULT_API_KEY = 'sk-sp-PLEASE-SET-CLAUDE_XXX_API_KEY'
 /** 默认模型 —— 注意不同网关可能只接受特定模型(DashScope 当前只接 qwen3-coder-plus) */
 export const DEFAULT_MODEL = 'qwen3-coder-plus'
 /** 默认超时 —— 副路一律短超时,失败即 degrade */
@@ -174,7 +175,7 @@ export async function callSideLLM(
 | `maxRetries` 用默认(2) | 一次超时会堆叠到 15-20s,把主会话拖垮 |
 | 没有 `__reset...ForTests()` | 测试之间状态泄漏,不同 config 复用旧 client |
 | 把副路当主路用(开 `max_tokens: 8000`、流式输出) | 不是这个模式的用法,换成多 provider 路由 |
-| 硬编码真机密 key 进源码 | 泄漏。默认常量只放团队共享 / 公开额度 key |
+| 硬编码真机密 key 进源码 | 泄漏。默认常量只放**占位符**,真 key 必走 env;任何能调 API 的 key 都视为机密,不看"团队共享"标签 |
 | 不做 abort 组合(只处理 timeout 不处理 external.signal) | React effect 卸载后请求继续跑,浪费 + 副作用漂 |
 
 ## 与相关 skill 的关系
@@ -183,6 +184,7 @@ export async function callSideLLM(
 - **[llm-classifier-prompt-discipline.md](llm-classifier-prompt-discipline.md)**:副路 client 的 `system` prompt 遵循分类器 prompt 纪律。
 - **[conservative-opt-in-feature-flag.md](conservative-opt-in-feature-flag.md)**:副路本身必须走 opt-in + fail-safe + catch-all。
 - **[third-party-performance-tuning.md](third-party-performance-tuning.md)**:副路不能拖主路,超时要短、重试要禁。
+- **[source-code-secret-audit.md](source-code-secret-audit.md)**:默认 key 占位符约定 + 提交前审计清单(本 skill 的安全邻居)。
 
 ## 当前项目里的实例
 

@@ -42,13 +42,27 @@
 
 ## 其余重要但较小的目录
 
-- `bootstrap/`：启动态全局状态与进程初始信息
-- `context/`：通知、邮箱、语音等上下文 Provider
-- `query/`、`QueryEngine.ts`、`query.ts`：主查询循环与调度核心
-- `assistant/`、`buddy/`、`coordinator/`：特性开关控制下的助手/协同模式
-- `remote/`、`server/`、`ssh/`、`upstreamproxy/`：远程会话与服务端适配
-- `plugins/`：内置插件注册
-- `voice/`、`vim/`、`screens/`、`daemon/`：特性化子系统
+- [`assistant/`](./assistant/INDEX.md)：viewer 模式入口、session 历史分页
+- [`bootstrap/`](./bootstrap/INDEX.md)：启动态全局状态、成本与遥测单例
+- [`buddy/`](./buddy/INDEX.md)：REPL 伙伴精灵特性（`feature('BUDDY')`）
+- [`context/`](./context/INDEX.md)：通知、邮箱、模态、语音等 React Context
+- [`coordinator/`](./coordinator/INDEX.md)：多 agent 协同模式与 worker tools
+- [`daemon/`](./daemon/INDEX.md)：`--daemon-worker` 动态分发入口
+- [`jobs/`](./jobs/INDEX.md)：任务复杂度分类器
+- [`moreright/`](./moreright/INDEX.md)：外部构建 hook stub
+- [`native-ts/`](./native-ts/INDEX.md)：color-diff / file-index / yoga-layout 纯 TS 回退
+- [`outputStyles/`](./outputStyles/INDEX.md)：output style markdown 加载
+- [`plugins/`](./plugins/INDEX.md)：内置插件注册
+- [`proactive/`](./proactive/INDEX.md)：主动模式运行期状态
+- [`query/`](./query/INDEX.md)：主查询循环拆分子模块（`query.ts` / `QueryEngine.ts` 仍是入口）
+- [`remote/`](./remote/INDEX.md)：CCR 远程会话客户端
+- [`schemas/`](./schemas/INDEX.md)：跨模块共享 Zod schema（循环依赖断点）
+- [`screens/`](./screens/INDEX.md)：REPL / Doctor / Resume 顶层屏幕
+- [`server/`](./server/INDEX.md)：direct-connect 会话客户端
+- [`ssh/`](./ssh/INDEX.md)：SSH session stub
+- [`upstreamproxy/`](./upstreamproxy/INDEX.md)：CCR upstreamproxy 中继
+- [`vim/`](./vim/INDEX.md)：vim 模式纯函数与状态机
+- [`voice/`](./voice/INDEX.md)：语音模式 kill-switch 与 provider 探测
 
 ## 推荐阅读顺序
 

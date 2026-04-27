@@ -27,6 +27,8 @@ There are **no lint, test, or build scripts**. Bun runs TypeScript directly. Val
 - **Bun >= 1.3.5**
 - **Node.js >= 24**
 
+每次编译打包都 自动升级版本 
+
 ## Environment Variables for Third-Party API
 
 ```bash

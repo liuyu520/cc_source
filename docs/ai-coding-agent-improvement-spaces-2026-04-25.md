@@ -197,7 +197,7 @@ src/services/toolBandit/
 - Step 1:`oracle/collapse-audit.ndjson` ledger + `CLAUDE_PRECOLLAPSE_AUDIT` 开关(默认 on,fail-open);
 - Step 2:`compact.ts:truncateHeadForPTLRetry` 成功路径注入 `auditCollapseDecision`,用 group 索引拼 victim id(`ptl-group:N`)记录 drop 事件时间序列 + dropCount/totalGroups/tokenGap;
 - Step 2:纯旁路,sliced 返回不受影响;env=off 时彻底静默。
-- probe(Step 1)28/28 + probe(Step 2)15/15 全绿;CLI boot smoke pass。Step 3(接入 ROI 关联 + 真实 drop 建议决策)pending。
+- probe(Step 1)28/28 + probe(Step 2)15/15 全绿;CLI boot smoke pass。Step 3 已落地(见上一块 advisor Rule 18)。
 
 **证据**：
 - `src/services/contextCollapse/` 有 collapse 机制；
@@ -318,12 +318,12 @@ Step 2 的 `/session-replay-diff <A> <B>` 要求用户手工准备两条 session
 - 新增 `/session-replay-diff <A> <B> [--top N] [--json] [--help]` 隐藏命令:复用 Step 1 sessionId resolver;markdown 默认输出 role-delta 表 + 🟢 added tools / 🔴 removed tools(退化嗅探信号)+ Δ tool uses 表;--json 全量结构化。
 - 纯读,不触发 resume / tool / MCP / sandbox。Step 1 解析器 + sessionId 解析 100% 复用,新增代码只做**蒸馏 + 集合差**。
 - probe 39/39 绿(含 empty signature + self-diff + reverse symmetry + 损坏行跳过);live CLI(/tmp/g7_live 合成 jsonl)输出正确 Grep removed / Bash added,--json 结构完整。
-- Step 3(真 sandbox 重放 + regression 标红)仍 pending——Step 2 已能覆盖"怀疑退化拿 baseline 对比"的最常见场景。
+- Step 3(真重放 + 回归标记,纯读工具)已在 2026-04-26 落地(见下方块);Step 2 decision-signature diff 仍保留作为零副作用路径。
 
 **⚠️ 2026-04-26 Step 1 已落地(只读 viewer):**
 - 新增 `src/services/sessionReplay/replayParser.ts`:纯读 jsonl,按 line 返回 `ReplayMessage`(role=user/assistant/tool_result/meta/unknown,summary+toolUses+uuid+isSidechain);支持 `from/to/grep/summaryMaxChars/keepMeta` 过滤;meta 类型(file-history-snapshot/content-replacement/context-collapse-commit/context-collapse-snapshot)默认跳过。
 - 新增 `src/commands/session-replay/index.ts` 隐藏命令:`/session-replay <path|sessionId> [--from N] [--to M] [--grep PAT] [--keep-meta] [--summary-max N] [--json] [--help]`;sessionId 走 CWD sanitize 查找,失败时跨 project 浅层扫。
-- 纯只读,不触发 resume / tool / MCP 副作用。Step 2(decision diff / fitness delta)pending。
+- 纯只读,不触发 resume / tool / MCP 副作用。Step 2/2+/3 已落地(见下方块)。
 - probe 31/31 绿;CLI boot smoke pass。
 
 **⚠️ 2026-04-26 Step 3 已落地(真重放 + 回归标记,纯读工具):**

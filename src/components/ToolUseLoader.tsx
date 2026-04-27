@@ -16,13 +16,25 @@ export function ToolUseLoader(t0) {
     shouldAnimate
   } = t0;
   const [ref, isBlinking] = useBlink(shouldAnimate);
+  // C1: 让 transcript 里"还在跑"的 tool 行更显眼。
+  // 原来 unresolved 态把圆点 dim 打暗,blink 幅度只在"暗字/空格"之间,
+  // 余光很难捕捉到哪条是活跃行。改为:活跃(unresolved + shouldAnimate)时
+  // 不再 dim,让 `●` 用主题默认亮度的前景色显示;blink 在"亮字/空格"之间
+  // 切换,差异明显。非动画(shouldAnimate=false)或已解决态维持原行为,
+  // 颜色依旧走 success/error/undefined 三档。
+  //
+  // ⚠️ ToolUseLoader.tsx 源文件注释里警告过 `dimColor` 与邻接 bold 的
+  // ANSI reset 陷阱(chalk#290)。去掉 unresolved 的 dimColor 反而消除
+  // 了与 AssistantToolUseMessage 里 `<Text bold>` tool name 相邻时的
+  // reset 冲突,对那条历史 bug 面上只会更安全。
   const color = isUnresolved ? undefined : isError ? "error" : "success";
+  const dim = isUnresolved && !shouldAnimate;
   const t1 = !shouldAnimate || isBlinking || isError || !isUnresolved ? BLACK_CIRCLE : " ";
   let t2;
-  if ($[0] !== color || $[1] !== isUnresolved || $[2] !== t1) {
-    t2 = <Text color={color} dimColor={isUnresolved}>{t1}</Text>;
+  if ($[0] !== color || $[1] !== dim || $[2] !== t1) {
+    t2 = <Text color={color} dimColor={dim}>{t1}</Text>;
     $[0] = color;
-    $[1] = isUnresolved;
+    $[1] = dim;
     $[2] = t1;
     $[3] = t2;
   } else {

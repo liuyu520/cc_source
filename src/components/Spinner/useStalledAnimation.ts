@@ -11,6 +11,12 @@ export function useStalledAnimation(
 ): {
   isStalled: boolean
   stalledIntensity: number
+  // Raw stall duration in ms (time since the last token), for callers that
+  // want to surface a textual "really stalled" hint beyond the red fade. This
+  // is the same signal that drives `isStalled` — exposing it avoids having
+  // every caller re-derive `lastTokenTime`.
+  // A2: SpinnerAnimationRow 用这个值触发 10s+ 的文字提示。
+  stalledDurationMs: number
 } {
   const lastTokenTime = useRef(time)
   const lastResponseLength = useRef(currentResponseLength)
@@ -71,5 +77,5 @@ export function useStalledAnimation(
     ? intensity
     : stalledIntensityRef.current
 
-  return { isStalled, stalledIntensity: effectiveIntensity }
+  return { isStalled, stalledIntensity: effectiveIntensity, stalledDurationMs: timeSinceLastToken }
 }

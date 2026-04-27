@@ -37,6 +37,7 @@ import { registerHttpServerSkill } from './httpServer.js'
 import { registerIntentRecallSkill } from './intentRecall.js'
 import { registerSchedulerKernelSkill } from './schedulerKernel.js'
 import { registerUiThemeSkill } from './uiTheme.js'
+import { registerTerminalTitleSkill } from './terminalTitle.js'
 
 /**
  * Initialize all bundled skills.
@@ -84,6 +85,7 @@ export function initBundledSkills(): void {
   registerExternalAgentOrchestrationSkill()
   registerSchedulerKernelSkill()
   registerUiThemeSkill()
+  registerTerminalTitleSkill()
   if (feature('KAIROS') || feature('KAIROS_DREAM')) {
     /* eslint-disable @typescript-eslint/no-require-imports */
     const { registerDreamSkill } = require('./dream.js')

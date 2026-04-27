@@ -98,13 +98,13 @@ export function GlimmerMessage(t0) {
           } else {
             t5 = $[18];
           }
-          t2 = <><Text color={color}>{message}</Text>{t5}</>;
+          t2 = <><Text bold color={color}>{message}</Text>{t5}</>;
           break bb0;
         }
         const color_0 = stalledIntensity > 0.5 ? "error" : messageColor;
         let t5;
         if ($[19] !== color_0 || $[20] !== message) {
-          t5 = <Text color={color_0}>{message}</Text>;
+          t5 = <Text bold color={color_0}>{message}</Text>;
           $[19] = color_0;
           $[20] = message;
           $[21] = t5;
@@ -138,7 +138,7 @@ export function GlimmerMessage(t0) {
         const shimmerRGB = shimmerColorStr ? parseRGB(shimmerColorStr) : null;
         if (baseRGB_0 && shimmerRGB) {
           const interpolated_0 = interpolateColor(baseRGB_0, shimmerRGB, flashOpacity);
-          const t5 = <Text color={toRGBColor(interpolated_0)}>{message}</Text>;
+          const t5 = <Text bold color={toRGBColor(interpolated_0)}>{message}</Text>;
           let t6;
           if ($[27] !== messageColor) {
             t6 = <Text color={messageColor}> </Text>;
@@ -162,7 +162,7 @@ export function GlimmerMessage(t0) {
         const color_1 = flashOpacity > 0.5 ? shimmerColor : messageColor;
         let t5;
         if ($[32] !== color_1 || $[33] !== message) {
-          t5 = <Text color={color_1}>{message}</Text>;
+          t5 = <Text bold color={color_1}>{message}</Text>;
           $[32] = color_1;
           $[33] = message;
           $[34] = t5;
@@ -213,7 +213,7 @@ export function GlimmerMessage(t0) {
   if (shimmerStart >= messageWidth || shimmerEnd < 0) {
     let t3;
     if ($[40] !== message || $[41] !== messageColor) {
-      t3 = <Text color={messageColor}>{message}</Text>;
+      t3 = <Text bold color={messageColor}>{message}</Text>;
       $[40] = message;
       $[41] = messageColor;
       $[42] = t3;
@@ -279,7 +279,7 @@ export function GlimmerMessage(t0) {
   }
   let t3;
   if ($[59] !== before || $[60] !== messageColor) {
-    t3 = before && <Text color={messageColor}>{before}</Text>;
+    t3 = before && <Text bold color={messageColor}>{before}</Text>;
     $[59] = before;
     $[60] = messageColor;
     $[61] = t3;
@@ -288,7 +288,7 @@ export function GlimmerMessage(t0) {
   }
   let t4;
   if ($[62] !== shim || $[63] !== shimmerColor) {
-    t4 = <Text color={shimmerColor}>{shim}</Text>;
+    t4 = <Text bold color={shimmerColor}>{shim}</Text>;
     $[62] = shim;
     $[63] = shimmerColor;
     $[64] = t4;
@@ -297,7 +297,7 @@ export function GlimmerMessage(t0) {
   }
   let t5;
   if ($[65] !== after || $[66] !== messageColor) {
-    t5 = after && <Text color={messageColor}>{after}</Text>;
+    t5 = after && <Text bold color={messageColor}>{after}</Text>;
     $[65] = after;
     $[66] = messageColor;
     $[67] = t5;

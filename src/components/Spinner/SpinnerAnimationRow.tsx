@@ -106,6 +106,16 @@ export function SpinnerAnimationRow({
   const now = Date.now();
   const elapsedTimeMs = pauseStartTimeRef.current !== null ? pauseStartTimeRef.current - loadingStartTimeRef.current - totalPausedMsRef.current : now - loadingStartTimeRef.current - totalPausedMsRef.current;
 
+  // 暂停状态:pauseStartTimeRef 非 null 表示 REPL 把"计时"挂起了(当前唯一
+  // 触发点是 tool-permission dialog focus)。此时应该:
+  //   1. 冻结 spinner frame,停止旋转 → 避免"在跑但其实停住"的视觉错觉
+  //   2. 抑制 stalled 红色 → 暂停 3s+ 会被 useStalledAnimation 错判为 stalled
+  //   3. 状态栏追加 "paused" 提示 → 让用户快速识别
+  // 不替换字符为 ⏸(U+23F8 是双宽字符,会让 <Box width={2}> 溢出),而是保留
+  // 当前 SPINNER_FRAMES 字符但停止步进,行为类似"spinner 卡住"的单字宽视觉。
+  const isPaused = pauseStartTimeRef.current !== null;
+  const frozenFrameRef = useRef(0);
+
   // Track wall-clock turn start for teammates. While a swarm is running the
   // leader's elapsedTimeMs may jump around (new API calls reset
   // loadingStartTimeRef; pauses freeze it), so we anchor to the earliest
@@ -124,11 +134,19 @@ export function SpinnerAnimationRow({
   // hasActiveTools both track leader state. When viewing an active teammate
   // while leader is idle, they'd otherwise flag a false stall after 3s.
   // Treating leaderIsIdle like hasActiveTools resets the stall timer.
+  // 暂停态(isPaused)也视为"不应报 stall":toolPermission dialog focus 期间
+  // responseLengthRef 不会变化,若不抑制 3s 后会被错判为 stalled 变红。
   const {
     isStalled,
-    stalledIntensity
-  } = useStalledAnimation(time, currentResponseLength, hasActiveTools || leaderIsIdle, reducedMotion);
-  const frame = reducedMotion ? 0 : Math.floor(time / 120);
+    stalledIntensity,
+    stalledDurationMs
+  } = useStalledAnimation(time, currentResponseLength, hasActiveTools || leaderIsIdle || isPaused, reducedMotion);
+  // 暂停时冻结 frame,恢复时 frame 连续继续,不要跳回 0(避免视觉跳变)。
+  const liveFrame = reducedMotion ? 0 : Math.floor(time / 120);
+  if (!isPaused) {
+    frozenFrameRef.current = liveFrame;
+  }
+  const frame = isPaused ? frozenFrameRef.current : liveFrame;
   const glimmerSpeed = mode === 'requesting' ? 50 : 200;
   // message is stable within a turn; stringWidth is expensive enough (Bun native
   // call per code point) to memoize explicitly across the 50ms loop.
@@ -199,8 +217,21 @@ export function SpinnerAnimationRow({
   const thinkingOpacity = time < THINKING_DELAY_MS ? 0 : (Math.sin(thinkingElapsedSec * Math.PI * 2 / THINKING_GLOW_PERIOD_S) + 1) / 2;
   const thinkingShimmerColor = toRGBColor(interpolateColor(THINKING_INACTIVE, THINKING_INACTIVE_SHIMMER, thinkingOpacity));
 
+  // A2: stall > 10s 时追加红色 "stalled (network?)" 文字提示。
+  // 光靠 spinner 颜色红染(stalledIntensity)传达"仍在等"信号太弱——很多用户
+  // 看不出来 spinner 微红色与普通色的差别,10s+ 时给一句文字提示,帮助他们
+  // 做"要不要 ctrl+c"的决策。paused 态不触发(计时器挂起,不代表真的卡了);
+  // reducedMotion 下也不触发(避免无障碍模式下突然出现红字)。
+  const showStalledHint = isStalled && stalledDurationMs > 10_000 && !isPaused && !reducedMotion;
   // === Build status parts ===
-  const parts = [...(spinnerSuffix ? [<Text dimColor key="suffix">
+  // 暂停态把 "paused" 放在 parts 最前,让 `(paused · 12s · 480 tokens)` 这类
+  // 组合一眼能看出状态;dimColor 与其它部件一致,不用额外颜色。
+  // 走 dimColor 能与"用户正在看 dialog"的 UI 情境保持低调,避免抢夺 dialog 焦点。
+  const parts = [...(isPaused ? [<Text dimColor key="paused">
+            paused
+          </Text>] : []), ...(showStalledHint ? [<Text color="error" key="stalled">
+            stalled (network?)
+          </Text>] : []), ...(spinnerSuffix ? [<Text dimColor key="suffix">
             {spinnerSuffix}
           </Text>] : []), ...(showTimer ? [<Text dimColor key="elapsedTime">
             {timerText}
@@ -224,7 +255,7 @@ export function SpinnerAnimationRow({
           <Text dimColor>)</Text>
         </> : null;
   return <Box ref={viewportRef} flexDirection="row" flexWrap="wrap" marginTop={1} width="100%">
-      <SpinnerGlyph frame={frame} messageColor={messageColor} stalledIntensity={overrideColor ? 0 : stalledIntensity} reducedMotion={reducedMotion} time={time} />
+      <SpinnerGlyph frame={frame} messageColor={messageColor} stalledIntensity={overrideColor ? 0 : stalledIntensity} reducedMotion={reducedMotion} time={time} elapsedTimeMs={isPaused ? 0 : effectiveElapsedMs} />
       <GlimmerMessage message={message} mode={mode} messageColor={messageColor} glimmerIndex={glimmerIndex} flashOpacity={flashOpacity} shimmerColor={shimmerColor} stalledIntensity={overrideColor ? 0 : stalledIntensity} />
       {status}
     </Box>;

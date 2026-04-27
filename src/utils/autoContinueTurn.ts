@@ -40,6 +40,14 @@ export const AUTO_CONTINUE_PROMPT_EN = 'continue'
 /** 连续自动续聊的硬上限，防止模型自相循环。 */
 export const AUTO_CONTINUE_MAX_CONSECUTIVE = 30
 
+/**
+ * idle 自动续聊默认循环上限。与 AUTO_CONTINUE_MAX_CONSECUTIVE 语义一致,但仅作用于
+ * "正常 auto-continue miss 且 LLM 兜底未开启"时走的 idle 分支 —— 用户常希望让 idle
+ * 久驻型循环比声明式续聊更宽松或更收紧,因此拆出独立旋钮。可用 env
+ * CLAUDE_AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE 覆盖,未设置时回退到 AUTO_CONTINUE_MAX_CONSECUTIVE。
+ */
+export const AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE = AUTO_CONTINUE_MAX_CONSECUTIVE
+
 /** idle 自动续聊默认等待 240s；仅在显式开关打开且正常 auto-continue miss 时才生效。 */
 export const AUTO_CONTINUE_IDLE_TIMEOUT_MS = 240000
 
@@ -49,6 +57,7 @@ export const AUTO_CONTINUE_IDLE_PROMPT_CANDIDATES = [
   '按照你的理解执行',
     "继续实施剩下的升级任务",
     "继续剩余的升级优化",
+    "真的无事可做就停住,不要动",
     "不要做无意义的事",
     "按优先级执行",
     "完成了吗",
@@ -72,6 +81,25 @@ export function getIdleAutoContinueTimeoutMs(): number {
   if (!raw) return AUTO_CONTINUE_IDLE_TIMEOUT_MS
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed < 1000) return AUTO_CONTINUE_IDLE_TIMEOUT_MS
+  return Math.floor(parsed)
+}
+
+/**
+ * 解析 idle auto-continue 的"连续循环次数上限"。
+ *
+ * 读取优先级:
+ *   1. env CLAUDE_AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE (正整数,必须 >= 1)
+ *   2. 默认值 AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE (= AUTO_CONTINUE_MAX_CONSECUTIVE)
+ *
+ * 非法值(非数字 / 非正数 / 非整数)一律回退默认,不抛异常 —— fail-open。
+ * 允许设 0?  显式要求 >=1:设 0 等价于关闭,但关闭已由 CLAUDE_AUTO_CONTINUE_ON_IDLE=0 控制,
+ * 这里不再提供第二种"关闭方式"以避免语义重叠。
+ */
+export function getIdleAutoContinueMaxConsecutive(): number {
+  const raw = process.env.CLAUDE_AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE?.trim()
+  if (!raw) return AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 1) return AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE
   return Math.floor(parsed)
 }
 

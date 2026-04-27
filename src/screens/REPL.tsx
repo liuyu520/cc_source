@@ -214,7 +214,7 @@ import { getCurrentWorktreeSession } from '../utils/worktree.js';
 import { popAllEditable, enqueue, type SetAppState, getCommandQueue, getCommandQueueLength, removeByFilter } from '../utils/messageQueueManager.js';
 // hanjun: CLAUDE_AUTO_CONFIRM_PROMPTS 扩展 —— 自动续聊（见 utils/autoContinueTurn.ts）。
 import { hasAutoConfirmInteractivePrompts } from '../utils/settings/settings.js';
-import { detectNextStepIntent, AUTO_CONTINUE_PROMPT, AUTO_CONTINUE_MAX_CONSECUTIVE, resolveAutoContinuePrompt, isAutoContinuePrompt, evaluateAutoContinue, isIdleAutoContinueEnabled, getIdleAutoContinueTimeoutMs, pickIdleAutoContinuePrompt } from '../utils/autoContinueTurn.js';
+import { detectNextStepIntent, AUTO_CONTINUE_PROMPT, AUTO_CONTINUE_MAX_CONSECUTIVE, resolveAutoContinuePrompt, isAutoContinuePrompt, evaluateAutoContinue, isIdleAutoContinueEnabled, getIdleAutoContinueTimeoutMs, getIdleAutoContinueMaxConsecutive, pickIdleAutoContinuePrompt } from '../utils/autoContinueTurn.js';
 // 第二条路径: 当正则 miss 时用轻量 LLM 兜底(opt-in via CLAUDE_AUTO_CONTINUE_LLM_ENABLED=1)。
 import { isAutoContinueLLMEnabled, detectNextStepIntentViaLLMGated } from '../utils/autoContinueTurnLLM.js';
 import { recordAutoContinueOutcome } from '../services/autoEvolve/learners/autoContinue.js';
@@ -547,7 +547,21 @@ function AnimatedTerminalTitle(t0) {
   }
   useEffect(t1, t2);
   const prefix = isAnimating ? TITLE_ANIMATION_FRAMES[frame] ?? TITLE_STATIC_PREFIX : TITLE_STATIC_PREFIX;
-  useTerminalTitle(disabled ? null : noPrefix ? title : `${prefix} ${title}`);
+  // Marker 分档(由 REPL 侧按语义派生,见 REPL.tsx 推导点):
+  //   等待审批(isWaitingForApproval) → "❗ "
+  //   执行工具中(hasActiveTools)     → "🔧 "
+  //   流式响应(streamMode=responding)→ "💬 "
+  //   其他 loading                    → "❓ "
+  //   idle                            → ""
+  // 注:审批场景下 titleIsAnimating 为 false(spinner 静止),由 ✳ 前缀 + ❗ marker
+  // 组合表达"停着等你确认"语义。toolName 在有活跃 tool 时露出(如 "Bash · "),
+  // 让 IDE tab 直接可见当前在跑哪个工具。
+  // 两个 prop 都在 t0 上宽松读取,未声明时默认为空,不破坏 React Compiler 的 _c 缓存。
+  const marker: string = t0.marker ?? '';
+  const toolName: string | undefined = t0.toolName;
+  const toolLead = toolName ? `${toolName} · ` : '';
+  const bodyTitle = `${marker}${toolLead}${title}`;
+  useTerminalTitle(disabled ? null : noPrefix ? title : `${prefix} ${bodyTitle}`);
   return null;
 }
 function _temp2(setFrame_0) {
@@ -555,6 +569,77 @@ function _temp2(setFrame_0) {
 }
 function _temp(f) {
   return (f + 1) % TITLE_ANIMATION_FRAMES.length;
+}
+
+/**
+ * B1: 把 loading / waiting-for-approval 状态通过 OSC 9;4 投射成终端进度条
+ * 或任务栏高亮。支持的终端:iTerm2 3.6.6+、Ghostty 1.2.0+、ConEmu、WezTerm。
+ * 不支持的终端会被 isProgressReportingAvailable() gate 掉,等于 no-op。
+ *
+ * 状态机(与 title marker 语义对齐):
+ *   isWaitingForApproval → 'error'       (红/橙色,最抢眼)
+ *   isAnimating          → 'indeterminate'(条纹动画,"在跑但不知进度")
+ *   以上都非              → 'completed'(清除)
+ *
+ * 与 AnimatedTerminalTitle 同理保持为"纯副作用叶子组件",这样后续每次
+ * 状态变化的 useEffect 只重渲染本组件(返回 null),不会拖动整个 REPL 树。
+ * 退出时 gracefulShutdown 已经统一 flush CLEAR_ITERM2_PROGRESS,这里不需
+ * 要额外的清场逻辑。
+ *
+ * 由 CLAUDE_CODE_DISABLE_TERMINAL_TITLE 与 title 共享同一把开关 — 两者
+ * 同属"状态外化到终端窗口/tab"这一条通道,要么一起关,要么一起开。
+ */
+function Iterm2Progress(t0: {
+  disabled: boolean;
+  isAnimating: boolean;
+  isWaitingForApproval: boolean;
+}) {
+  const { disabled, isAnimating, isWaitingForApproval } = t0;
+  const { progress } = useTerminalNotification();
+  useEffect(() => {
+    if (disabled) {
+      // 明确清一次,避免 title-disabled 但 progress 还留着的不一致状态。
+      progress(null);
+      return;
+    }
+    if (isWaitingForApproval) {
+      progress('error', 0);
+    } else if (isAnimating) {
+      progress('indeterminate');
+    } else {
+      progress(null);
+    }
+  }, [disabled, isAnimating, isWaitingForApproval, progress]);
+  return null;
+}
+
+/**
+ * B2: 进入"等待审批"态的第一帧响一次终端 bell(ASCII BEL, \x07)。
+ *
+ * 场景:用户 ctrl+tab 去做别的事,claude 跑到一半撞上 tool-permission
+ * dialog,原本只有屏幕上静态出现一个对话框。切回来看时可能已过去好几分钟。
+ * Bell 让终端发声(或 tmux 标记 bell flag / iTerm2 闪 dock 图标 /
+ * macOS Terminal.app 闪红点),把"你该回来看一眼"通知出去。
+ *
+ * 默认 off — 很多人讨厌 bell 声。由 CLAUDE_CODE_BELL_ON_APPROVAL=1
+ * 显式开启。mount-time 读取一次,不做 live 切换。
+ *
+ * 只在 `isWaitingForApproval` 从 false→true 转换时触发一次,不在持续态
+ * 里重复响(useBlink 式连续 bell 会让人抓狂)。用 ref 记录上一帧状态。
+ */
+function ApprovalBell(t0: { isWaitingForApproval: boolean; }) {
+  const { isWaitingForApproval } = t0;
+  const { notifyBell } = useTerminalNotification();
+  // mount-time env 读一次,避免渲染路径里每次算 toLowerCase。
+  const enabled = useMemo(() => isEnvTruthy(process.env.CLAUDE_CODE_BELL_ON_APPROVAL), []);
+  const prevRef = useRef(false);
+  useEffect(() => {
+    if (enabled && isWaitingForApproval && !prevRef.current) {
+      notifyBell();
+    }
+    prevRef.current = isWaitingForApproval;
+  }, [enabled, isWaitingForApproval, notifyBell]);
+  return null;
 }
 type ReplRuntimeBoundaryState = {
   error: Error | null;
@@ -1776,6 +1861,34 @@ export function REPL({
     const inProgressToolUses = lastAssistant.message.content.filter(b => b.type === 'tool_use' && inProgressToolUseIDs.has(b.id));
     return inProgressToolUses.length > 0 && inProgressToolUses.every(b => b.type === 'tool_use' && b.name === SLEEP_TOOL_NAME);
   }, [messages, inProgressToolUseIDs]);
+  // 取最后一个正在进行中的 tool_use 名,透出到终端标题。Sleep 不露出(与
+  // onlySleepToolActive 保持一致:它会隐藏 spinner,标题也没必要显示)。
+  // 依赖与上面完全一致,单独 useMemo 让 dep 失效时能独立判定,避免把 string 与
+  // boolean 绑在同一个对象里引起更上层消费的冗余重渲染。
+  const activeToolName = useMemo<string | undefined>(() => {
+    const lastAssistant = messages.findLast(m => m.type === 'assistant');
+    if (lastAssistant?.type !== 'assistant') return undefined;
+    const inProgress = lastAssistant.message.content.findLast(
+      b => b.type === 'tool_use' && inProgressToolUseIDs.has(b.id),
+    );
+    if (!inProgress || inProgress.type !== 'tool_use') return undefined;
+    if (inProgress.name === SLEEP_TOOL_NAME) return undefined;
+    return inProgress.name;
+  }, [messages, inProgressToolUseIDs]);
+  // 终端标题 marker 分档。语义(按优先级从高到低):
+  //   ❗  等待审批  — 最抢眼,用户必须回来看
+  //   🔧  执行工具  — 有活跃 tool 在跑
+  //   💬  流式响应  — 模型正在输出文本
+  //   ❓  其他 loading(requesting 等待首 token、模型 routing 中)
+  // 审批场景 titleIsAnimating=false(spinner 静止),仍然允许 marker 透出,
+  // 由 ✳ + ❗ 组合表达"停着等你"。idle 时返回空,标题退回到朴素 "✳ Claude Code"。
+  const titleMarker = useMemo<string>(() => {
+    if (isWaitingForApproval) return '❗ ';
+    if (!titleIsAnimating) return '';
+    if (activeToolName) return '🔧 ';
+    if (streamMode === 'responding') return '💬 ';
+    return '❓ ';
+  }, [isWaitingForApproval, titleIsAnimating, activeToolName, streamMode]);
   const {
     onBeforeQuery: mrOnBeforeQuery,
     onTurnComplete: mrOnTurnComplete,
@@ -3887,6 +4000,9 @@ export function REPL({
         if (!isIdleAutoContinueEnabled()) return;
         if (stopReason === 'tool_use') return;
         const timeoutMs = getIdleAutoContinueTimeoutMs();
+        // idle 分支独立的连续循环上限,由 env CLAUDE_AUTO_CONTINUE_IDLE_MAX_CONSECUTIVE 控制,
+        // 未设置时等价于 AUTO_CONTINUE_MAX_CONSECUTIVE;与 LLM/sync 路径的 cap 相互独立。
+        const idleMaxConsecutive = getIdleAutoContinueMaxConsecutive();
         const idlePrompt = pickIdleAutoContinuePrompt();
         const idleTimer = setTimeout(() => {
           if (queryGuard.isActive) return;
@@ -3905,9 +4021,9 @@ export function REPL({
           if (!isAutoContinuePrompt(lastUserTextNow)) {
             autoContinueCountRef.current = 0;
           }
-          if (autoContinueCountRef.current >= AUTO_CONTINUE_MAX_CONSECUTIVE) {
+          if (autoContinueCountRef.current >= idleMaxConsecutive) {
             setMessages(prev => [...prev, createSystemMessage(
-              `⚠️ idle 自动续聊已连续触发 ${AUTO_CONTINUE_MAX_CONSECUTIVE} 次，已暂停，等待人工介入。`,
+              `⚠️ idle 自动续聊已连续触发 ${idleMaxConsecutive} 次，已暂停，等待人工介入。`,
               'warning'
             )]);
             lastAutoContinueAssistantIdRef.current = assistantKey;
@@ -3917,7 +4033,7 @@ export function REPL({
           autoContinueCountRef.current += 1;
           const currentCount = autoContinueCountRef.current;
           setMessages(prev => [...prev, createSystemMessage(
-            `⏳ idle auto-continue (${currentCount}/${AUTO_CONTINUE_MAX_CONSECUTIVE}) [idle:${timeoutMs}ms]: ${idlePrompt}`,
+            `⏳ idle auto-continue (${currentCount}/${idleMaxConsecutive}) [idle:${timeoutMs}ms]: ${idlePrompt}`,
             'info'
           )]);
           void onSubmitRef.current(idlePrompt, {
@@ -4963,7 +5079,9 @@ export function REPL({
         {toolJSX.jsx}
       </Box>;
     const transcriptReturn = <KeybindingSetup>
-        <AnimatedTerminalTitle isAnimating={titleIsAnimating} title={terminalTitle} disabled={titleDisabled} noPrefix={showStatusInTerminalTab} />
+        <AnimatedTerminalTitle isAnimating={titleIsAnimating} title={terminalTitle} disabled={titleDisabled} noPrefix={showStatusInTerminalTab} marker={titleMarker} toolName={activeToolName} />
+        <Iterm2Progress disabled={titleDisabled} isAnimating={titleIsAnimating} isWaitingForApproval={isWaitingForApproval} />
+        <ApprovalBell isWaitingForApproval={isWaitingForApproval} />
         <GlobalKeybindingHandlers {...globalKeybindingProps} />
         {feature('VOICE_MODE') ? <VoiceKeybindingHandler voiceHandleKeyEvent={voice.handleKeyEvent} stripTrailing={voice.stripTrailing} resetAnchor={voice.resetAnchor} isActive={!toolJSX?.isLocalJSXCommand} /> : null}
         <CommandKeybindingHandlers onSubmit={onSubmit} isActive={!toolJSX?.isLocalJSXCommand} />
@@ -5105,7 +5223,9 @@ export function REPL({
   // early return above wraps its virtual-scroll branch the same way; only
   // the 30-cap dump branch stays unwrapped for native terminal scrollback.
   const mainReturn = <KeybindingSetup>
-      <AnimatedTerminalTitle isAnimating={titleIsAnimating} title={terminalTitle} disabled={titleDisabled} noPrefix={showStatusInTerminalTab} />
+      <AnimatedTerminalTitle isAnimating={titleIsAnimating} title={terminalTitle} disabled={titleDisabled} noPrefix={showStatusInTerminalTab} marker={titleMarker} toolName={activeToolName} />
+      <Iterm2Progress disabled={titleDisabled} isAnimating={titleIsAnimating} isWaitingForApproval={isWaitingForApproval} />
+      <ApprovalBell isWaitingForApproval={isWaitingForApproval} />
       <GlobalKeybindingHandlers {...globalKeybindingProps} />
       {feature('VOICE_MODE') ? <VoiceKeybindingHandler voiceHandleKeyEvent={voice.handleKeyEvent} stripTrailing={voice.stripTrailing} resetAnchor={voice.resetAnchor} isActive={!toolJSX?.isLocalJSXCommand} /> : null}
       <CommandKeybindingHandlers onSubmit={onSubmit} isActive={!toolJSX?.isLocalJSXCommand} />

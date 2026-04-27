@@ -53,7 +53,7 @@
 - [ ] **Step 2: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 3: 提交**
 
@@ -139,7 +139,7 @@ function translateThinking(
 - [ ] **Step 3: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 4: 提交**
 
@@ -183,7 +183,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 - [ ] **Step 3: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 4: 提交**
 
@@ -223,7 +223,7 @@ function createReasoningItem(block: { thinking: string }): ReasoningItem {
 - [ ] **Step 2: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 3: 提交**
 
@@ -298,7 +298,7 @@ function createFunctionCallOutputItem(block: {
 - [ ] **Step 2: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 3: 提交**
 
@@ -347,7 +347,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 - [ ] **Step 2: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 3: 提交**
 
@@ -433,7 +433,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 - [ ] **Step 2: 验证编译通过**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 3: 提交**
 
@@ -454,7 +454,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 - [ ] **Step 1: 启动 CLI 确认基础功能正常**
 
 Run: `bun ./src/bootstrap-entry.ts --version`
-Expected: `260414.0.6-hanjun (Claude Code)`
+Expected: `260414.0.7-hanjun (Claude Code)`
 
 - [ ] **Step 2: 检查所有修改文件的 import 和类型一致性**
 
