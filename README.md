@@ -11380,6 +11380,89 @@ skill。
 方向 G 是零成本改动,建议当作顺手的 polish 跟 D 一起做 —— 一行代码消除幻觉。
 --------------------------------------------------------
 
+⏺ Dormant 测试没生效——因为 __setCachedUsageStatsForTest 不存在,ranker 走了真实 stats(没有 old-skill/never-called 记录就不算
+dormant)。换条路径:直接给 ranker 注入 env + mock stats 的方式不可行,干脆改用 explainRanking 验证评分路径,再单独验证 isDormant
+单元逻辑。
+
+Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(export CLAUDE_EVOLVE_TOOL_SPECIFIC_REFINERY=off
+grep -nE "^export (function|const|class|interface|type) " /Users/ywwl/Documents/code/ideaWorkspace/ai/claude-cod…)
+⎿  16:export interface SkillUsageRecord {
+25:export interface SkillUsageStats {
+48:export function getCachedUsageStats(): SkillUsageStats | null {
+… +4 lines (ctrl+o to expand)
+
+⏺ Bash(export CLAUDE_EVOLVE_TOOL_SPECIFIC_REFINERY=off
+bun -e "…)
+⎿  /skill-roi — skill usage / dormant / ranker switch audit (read-only)
+
+     stats file loaded: 7 tracked skills
+     … +25 lines (ctrl+o to expand)
+
+⏺ Bash(export CLAUDE_EVOLVE_TOOL_SPECIFIC_REFINERY=off
+# 最后一轮 regression:确保 attachments + prompt.ts 仍可 import,ranker + roi 都能走通…)
+⎿  ALL MODULES OK
+
+⏺ Wave 3 全部落地并通过真实验证。
+
+交付清单
+
+新增文件
+- src/skills/skillListingRanker.ts — 方向 C/J/K/L/M 合并的重排器,含 dormant gate + ε-greedy 探索
+- src/commands/skill-roi/index.ts — 方向 P 只读审计命令
+
+修改文件
+- src/commands.ts — 注册 /skill-roi(第 79 行 import + 第 412 行数组条目)
+- src/tools/SkillTool/prompt.ts — 方向 A 同族折叠(maybeFoldNonBundled + protectTop/minGroup 保护)
+- src/utils/attachments.ts — 接入 ranker + lazy stub + TTL 衰减
+- src/utils/messages.ts + src/components/messages/AttachmentMessage.tsx — lazy-stub 变体渲染
+
+验证结果
+
+┌───────────────────────────────────────────┬──────────────────────────────────────────────┐
+│                   场景                    │                     结果                     │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ /skill-roi --help                         │ USAGE 正确输出                               │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ /skill-roi(默认)                          │ 7 tracked skills,Top/switches/updatedAt 完整 │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ /skill-roi --json                         │ 结构化 stats/switches/top/dormant 齐全       │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ /skill-roi --dormant-days 1 --top 3       │ 5 条 dormant 按天数降序                      │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ ranker keyword rescue (lark 文档)         │ lark-doc 排首位                              │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ 折叠(4 lark-* + 4 superpowers-*)          │ 压成两行 prefix-* (N skills: …)              │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ bun test src/skills/loadSkillsDir.test.ts │ 1 pass                                       │
+├───────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ 全模块 import                             │ OK                                           │
+└───────────────────────────────────────────┴──────────────────────────────────────────────┘
+
+环境开关表
+
+┌──────────────────────────────────────────────────────┬─────────────┬───────────────────────────┐
+│                         ENV                          │    默认     │           作用            │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_DISABLE_SKILL_RANKER                     │ off         │ 整个 ranker 禁用,回退原序 │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_DISABLE_DORMANT_GATE                     │ off         │ 关 dormant 剔除,保留打分  │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_DISABLE_SKILL_FOLDING                    │ off         │ 关同族折叠                │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_SKILL_DORMANT_DAYS                       │ 30          │ dormant 窗口天数          │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_SKILL_RANK_EXPLORE_EPSILON               │ 0.1         │ ε-greedy 召回概率,0 关    │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_SKILL_RANK_W_{KEYWORD,FREQUENCY,BUNDLED} │ 0.5/0.4/0.1 │ 三项融合权重              │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_SKILL_FOLD_PROTECT_TOP                   │ 20          │ 前 N 非 bundled 禁折      │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_SKILL_FOLD_MIN_GROUP                     │ 3           │ 折叠最小成员              │
+├──────────────────────────────────────────────────────┼─────────────┼───────────────────────────┤
+│ CLAUDE_CODE_SKILL_TRIGGER_TTL_MS                     │ 900000      │ 触发后渐进窗口            │
+└──────────────────────────────────────────────────────┴─────────────┴───────────────────────────┘
 --------------------------------------------------------
 
 --------------------------------------------------------
