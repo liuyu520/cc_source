@@ -83,6 +83,7 @@ import { getSkillToolCommands, getMcpSkillCommands } from '../commands.js'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { getProjectRoot } from '../bootstrap/state.js'
 import { formatCommandsWithinBudget } from '../tools/SkillTool/prompt.js'
+import { rankSkillsForListing } from '../skills/skillListingRanker.js'
 import { getContextWindowForModel } from './context.js'
 import type { DiscoverySignal } from '../services/skillSearch/signals.js'
 import {
@@ -549,6 +550,17 @@ export type Attachment =
       content: string
       skillCount: number
       isInitial: boolean
+      /**
+       * 方向 G（2026-04-27）：普通 catalog（默认）或 lazy-stub（1 行抑制幻觉）。
+       * 'lazy-stub' 在第三方 API 懒加载期发一次，告诉模型"注册表存在但未加载"。
+       */
+      variant?: 'catalog' | 'lazy-stub'
+      /**
+       * 方向 B（2026-04-27，观察层）：skill catalog 在多轮间完全稳定，适合走
+       * 服务端 prompt cache（如 MiniMax ephemeral / Anthropic cache_control）。
+       * 这里只打数据标记，真正写入 cache_control 的工作放到后续接入点。
+       */
+      cacheStable?: boolean
     }
   | {
       type: 'skill_discovery'
@@ -814,7 +826,7 @@ export async function getAttachments(
   // Attachments which are added in response to on user input
   const shouldSuppressConservativeSkillDiscovery =
     shouldSuppressExecutionAttachments &&
-    !skillsTriggered &&
+    !isSkillsTriggered() &&
     (context.discoveredSkillNames?.length ?? 0) === 0
 
   const userInputAttachments = input
@@ -934,7 +946,7 @@ export async function getAttachments(
     maybe('dynamic_skill', () => Promise.resolve(dynamicSkillAttachments)),
     ...(shouldSuppressExecutionAttachments
       ? []
-      : [maybe('skill_listing', () => getSkillListingAttachments(context, messages))]),
+      : [maybe('skill_listing', () => getSkillListingAttachments(context, messages, input))]),
     // Inter-turn skill discovery now runs via startSkillDiscoveryPrefetch
     // (query.ts, concurrent with the main turn). The blocking call that
     // previously lived here was the assistant_turn signal — 97% of those
@@ -2806,6 +2818,10 @@ async function getDynamicSkillAttachments(
 // discovered-set continuity.
 const sentSkillNames = new Map<string, Set<string>>()
 
+// 方向 G：sentSkillNames 里存放 skill 名字；额外塞一个保留 sentinel 字符串用于
+// 标记 "lazy-stub 本 agent 已发过"，避免和真实 skill name 冲突（带前缀 $ 字面量）。
+const LAZY_SKILL_STUB_SENTINEL = '$$lazy-skill-stub$$'
+
 // Called when the skill set genuinely changes (plugin reload, skill file
 // change on disk) so new skills get announced. NOT called on compact —
 // post-compact re-injection costs ~4K tokens/event for marginal benefit.
@@ -2843,31 +2859,59 @@ let suppressNext = false
  * 与 sentSkillNames 不同：sentSkillNames 是 first-party 用于"已发过的不再发"的去重，
  * skillsTriggered 是第三方专用的"还没用过就完全跳过"开关。
  *
+ * 方向 D（衰减触发）：原先是单向 latch，一旦翻开到进程结束都 eager。
+ * 真实使用里，用户往往只在若干分钟内连续调 skill，之后就回到普通对话，
+ * 没必要再常驻 skill_listing。改为记录最后触发时间戳，超过 TTL 未再触发
+ * 自动回落 lazy，可通过 env CLAUDE_CODE_SKILL_TRIGGER_TTL_MS 调整（默认
+ * 15min）。markSkillsTriggered 仍然幂等、可重复调用 —— 每次调用都刷新时间戳。
+ *
  * 复用 module-scope 进程级状态（同 sentSkillNames 设计），每次 claude -p 重新触发。
  */
-let skillsTriggered = false
+let lastSkillsTriggeredAt: number | null = null
+
+const DEFAULT_SKILL_TRIGGER_TTL_MS = 15 * 60 * 1000 // 15min
+
+function getSkillTriggerTtlMs(): number {
+  const raw = process.env.CLAUDE_CODE_SKILL_TRIGGER_TTL_MS
+  if (!raw) return DEFAULT_SKILL_TRIGGER_TTL_MS
+  const n = Number(raw)
+  // 非法值或 <=0 回退默认（0 会让 isSkillsTriggered 永远 false，和 reset 等价，
+  // 若真想永久 lazy 用 resetSkillsTriggered 即可）。
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SKILL_TRIGGER_TTL_MS
+}
 
 /**
  * 标记 skills 已被触发使用 — 之后第三方 API 也会开始注入 skill_listing。
- * 在 SkillTool.call() 入口、/skill 命令派发处调用。幂等，可重复调用。
+ * 在 SkillTool.call() 入口、/skill 命令派发处调用。幂等，每次刷新时间戳。
  */
 export function markSkillsTriggered(): void {
-  if (!skillsTriggered) {
-    skillsTriggered = true
+  const previouslyActive = isSkillsTriggered()
+  lastSkillsTriggeredAt = Date.now()
+  if (!previouslyActive) {
     logForDebugging('[skills] lazy-injection triggered (third-party API will now include skill_listing)')
   }
+}
+
+/**
+ * 读取当前是否在触发窗口内。窗口定义：最近一次 mark 距今 <= TTL。
+ * 模块外读者都应使用此 getter，而非直接读取内部变量，以便后续扩展。
+ */
+export function isSkillsTriggered(): boolean {
+  if (lastSkillsTriggeredAt === null) return false
+  return Date.now() - lastSkillsTriggeredAt <= getSkillTriggerTtlMs()
 }
 
 /**
  * 仅供测试 / reset 调用，重置触发标志。
  */
 export function resetSkillsTriggered(): void {
-  skillsTriggered = false
+  lastSkillsTriggeredAt = null
 }
 
 async function getSkillListingAttachments(
   toolUseContext: ToolUseContext,
   messages?: ReadonlyArray<Message>,
+  userInput?: string | null,
 ): Promise<Attachment[]> {
   if (process.env.NODE_ENV === 'test') {
     return []
@@ -2881,21 +2925,23 @@ async function getSkillListingAttachments(
   // 第三方 API / Codex 节省 token：默认 lazy 注入 skill listing（~4K tokens）
   // 触发条件（任一即可，按优先级）：
   //   1. CLAUDE_CODE_ENABLE_SKILLS=1（强制 eager 模式，与 first-party 一致）
-  //   2. skillsTriggered=true（SkillTool 已调用 / 用户已输入 /skill）
+  //   2. isSkillsTriggered()=true（最近 TTL 内 SkillTool 被调用 / 用户已输入 /skill
+  //      命令；TTL 过期后自动回落 lazy，见 markSkillsTriggered 说明）
   //   3. 已有 discovered skills（turn-0/turn-N discovery、dynamic skills、resume continuity）
   // Codex 额外收紧：若当前还没有任何已发现技能，则继续保持 lazy 模式，
   // 避免 simple/direct 请求仅因 provider 降级路径而重新看到整段 workflow/skills 指导。
   // 可通过 CLAUDE_CODE_DISABLE_LAZY_SKILLS=1 关闭 lazy 模式回退到旧"完全禁用"行为。
+  let shouldEmitLazyStub = false
   try {
     const { getAPIProvider } = require('./model/providers.js')
     const provider = getAPIProvider()
     const eager = !!process.env.CLAUDE_CODE_ENABLE_SKILLS
-    const shouldStayLazy = !eager && !skillsTriggered && knownSkillNames.size === 0
-    if (provider === 'codex' && shouldStayLazy) {
-      return []
-    }
-    if (provider === 'thirdParty' && shouldStayLazy) {
-      return []
+    const shouldStayLazy = !eager && !isSkillsTriggered() && knownSkillNames.size === 0
+    const isLazyProvider = provider === 'codex' || provider === 'thirdParty'
+    if (isLazyProvider && shouldStayLazy) {
+      shouldEmitLazyStub = !isEnvTruthy(
+        process.env.CLAUDE_CODE_DISABLE_LAZY_SKILL_STUB,
+      )
     }
   } catch { /* 模块加载失败时继续原逻辑 */ }
 
@@ -2904,6 +2950,33 @@ async function getSkillListingAttachments(
     !toolUseContext.options.tools.some(t => toolMatchesName(t, SKILL_TOOL_NAME))
   ) {
     return []
+  }
+
+  if (shouldEmitLazyStub) {
+    // 方向 G：lazy 态发一次极短 stub（每 agent 幂等），避免模型试探性幻觉调用
+    // /<skill-name>。放到 SkillTool 可用性检查之后，没装 SkillTool 的 agent
+    // 本来就用不上 skill，不发 stub。
+    const stubAgentKey = toolUseContext.agentId ?? ''
+    const stubSent = sentSkillNames.get(stubAgentKey) ?? new Set<string>()
+    if (stubSent.has(LAZY_SKILL_STUB_SENTINEL)) {
+      return []
+    }
+    stubSent.add(LAZY_SKILL_STUB_SENTINEL)
+    sentSkillNames.set(stubAgentKey, stubSent)
+    return [
+      {
+        type: 'skill_listing',
+        content:
+          `Skills registry: lazy-loaded in this third-party API session to save tokens. ` +
+          `No skill catalog has been injected. If the user's request might benefit from ` +
+          `a skill, ask them to type "load skill" in the REPL to enable the catalog — ` +
+          `do not try to invoke unknown /<skill-name> commands blindly.`,
+        skillCount: 0,
+        isInitial: true,
+        variant: 'lazy-stub',
+        cacheStable: true,
+      },
+    ]
   }
 
   const cwd = getProjectRoot()
@@ -2965,12 +3038,17 @@ async function getSkillListingAttachments(
     `Sending ${newSkills.length} skills via attachment (${isInitial ? 'initial' : 'dynamic'}, ${sent.size} total sent)`,
   )
 
+  // 方向 C/J/K（2026-04-27）：在 formatCommandsWithinBudget 截断前先重排，
+  // 使得命中关键词 + 历史高频 + bundled 的 skill 先进预算。userInput 空也无害，
+  // 此时 keyword 项为 0，退化为"频率 + bundled"排序，等价于"懒人历史"策略。
+  const rankedSkills = rankSkillsForListing(newSkills, userInput)
+
   // Format within budget using existing logic
   const contextWindowTokens = getContextWindowForModel(
     toolUseContext.options.mainLoopModel,
     getSdkBetas(),
   )
-  const content = formatCommandsWithinBudget(newSkills, contextWindowTokens)
+  const content = formatCommandsWithinBudget(rankedSkills, contextWindowTokens)
 
   return [
     {
@@ -2978,6 +3056,10 @@ async function getSkillListingAttachments(
       content,
       skillCount: newSkills.length,
       isInitial,
+      variant: 'catalog',
+      // 方向 B（观察层）：skill catalog 在多轮间是纯净 cache-friendly 内容，
+      // 先打标记；真正映射到第三方 provider 的 cache_control 写入由调用方决策。
+      cacheStable: true,
     },
   ]
 }

@@ -3778,11 +3778,17 @@ Read the team config to discover your teammates' names. Check the task list peri
       if (!attachment.content) {
         return []
       }
+      // 方向 G：lazy-stub 是一条独立的告知（没有 catalog 正文），直接原样注入，
+      // 不要套 "The following discovered or currently relevant skills are
+      // available..." 这种 catalog 前缀，否则自相矛盾。
+      const body =
+        attachment.variant === 'lazy-stub'
+          ? attachment.content
+          : `The following discovered or currently relevant skills are available ` +
+            `for use with the Skill tool:\n\n${attachment.content}`
       return wrapMessagesInSystemReminder([
         createUserMessage({
-          content:
-            `The following discovered or currently relevant skills are available ` +
-            `for use with the Skill tool:\n\n${attachment.content}`,
+          content: body,
           isMeta: true,
         }),
       ])

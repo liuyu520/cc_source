@@ -67,6 +67,109 @@ function formatCommandDescription(cmd: Command): string {
 
 const MIN_DESC_LENGTH = 20
 
+// 方向 A（同族折叠）默认参数 ——
+// FOLD_PROTECT_TOP：列表前 N 个非 bundled 保持独立行，保留 ranker 挑选出来的
+// 核心候选不被折叠。N 以后的才进入折叠候选。
+const DEFAULT_FOLD_PROTECT_TOP = 20
+// 折叠阈值：同前缀至少 M 个才压成一行，否则沿用独立行，避免 "2 个 skill
+// 也折叠" 反而更长。
+const DEFAULT_FOLD_MIN_GROUP = 3
+
+function isFoldingDisabled(): boolean {
+  const raw = process.env.CLAUDE_CODE_DISABLE_SKILL_FOLDING
+  if (!raw) return false
+  return raw === '1' || raw.toLowerCase() === 'true'
+}
+
+function readPositiveInt(envName: string, fallback: number): number {
+  const raw = process.env[envName]
+  if (!raw) return fallback
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) return fallback
+  return Math.floor(n)
+}
+
+/**
+ * 同前缀折叠：把同一"连字符首段"并且人数 ≥ M 的非 bundled skill 压成一行
+ * `- prefix-*: name1, name2, name3, ...`。保留全部 name 字面，只省去每人一行
+ * 的 description。
+ *
+ * 约束:
+ *   - 只折叠"排名靠后"的（idx >= protectTop），ranker 已把高分项挑前面，
+ *     压缩高分项等于自伤；
+ *   - 仅前缀本身 ≥ 2 字符且含连字符才折叠（单词 skill 不折），防"pdf / gif"
+ *     这类独立 skill 被当成 "p" 前缀；
+ *   - 不影响 bundled（永远独立）。
+ *
+ * 返回按原 commands 顺序组织、但其中一部分条目被替换为折叠行的字符串数组。
+ */
+function maybeFoldNonBundled(
+  commands: Command[],
+  protectTop: number,
+  minGroup: number,
+): string[] {
+  const out: string[] = []
+
+  type Slot = { cmd: Command; idx: number }
+  const groups = new Map<string, Slot[]>()
+  const ungroupable: Slot[] = []
+  const bundledSlots: Slot[] = []
+  const protectedSlots: Slot[] = []
+
+  commands.forEach((cmd, idx) => {
+    if (cmd.type === 'prompt' && cmd.source === 'bundled') {
+      bundledSlots.push({ cmd, idx })
+      return
+    }
+    if (idx < protectTop) {
+      protectedSlots.push({ cmd, idx })
+      return
+    }
+    const dashIdx = cmd.name.indexOf('-')
+    if (dashIdx < 2) {
+      ungroupable.push({ cmd, idx })
+      return
+    }
+    const prefix = cmd.name.slice(0, dashIdx)
+    if (!groups.has(prefix)) groups.set(prefix, [])
+    groups.get(prefix)!.push({ cmd, idx })
+  })
+
+  // 分组成员 < minGroup 的回退到独立行
+  const foldedEntries: Array<{ idx: number; line: string }> = []
+  for (const [prefix, slots] of groups) {
+    if (slots.length >= minGroup) {
+      const names = slots.map(s => s.cmd.name).join(', ')
+      foldedEntries.push({
+        idx: slots[0]!.idx, // 用组内第一个的原索引做锚，保序
+        line: `- ${prefix}-* (${slots.length} skills: ${names})`,
+      })
+    } else {
+      for (const s of slots) {
+        ungroupable.push(s)
+      }
+    }
+  }
+
+  // 合并回原顺序：bundled/protected/ungroupable 都用原 idx，foldedEntries 用锚点
+  const merged: Array<{ idx: number; line: string }> = []
+  for (const s of bundledSlots) {
+    merged.push({ idx: s.idx, line: formatCommandDescription(s.cmd) })
+  }
+  for (const s of protectedSlots) {
+    merged.push({ idx: s.idx, line: `- ${s.cmd.name}` })
+  }
+  for (const s of ungroupable) {
+    merged.push({ idx: s.idx, line: `- ${s.cmd.name}` })
+  }
+  for (const e of foldedEntries) {
+    merged.push(e)
+  }
+  merged.sort((a, b) => a.idx - b.idx)
+  for (const m of merged) out.push(m.line)
+  return out
+}
+
 export function formatCommandsWithinBudget(
   commands: Command[],
   contextWindowTokens?: number,
@@ -74,6 +177,26 @@ export function formatCommandsWithinBudget(
   if (commands.length === 0) return ''
 
   const budget = getCharBudget(contextWindowTokens)
+
+  // 方向 A：先尝试同前缀折叠（可关），得到的是"紧凑版"的 entries。
+  // 折叠后如果依然在预算内，直接返回；超出的话仍走原来的截断逻辑。
+  if (!isFoldingDisabled()) {
+    const protectTop = readPositiveInt(
+      'CLAUDE_CODE_SKILL_FOLD_PROTECT_TOP',
+      DEFAULT_FOLD_PROTECT_TOP,
+    )
+    const minGroup = readPositiveInt(
+      'CLAUDE_CODE_SKILL_FOLD_MIN_GROUP',
+      DEFAULT_FOLD_MIN_GROUP,
+    )
+    const foldedLines = maybeFoldNonBundled(commands, protectTop, minGroup)
+    const joined = foldedLines.join('\n')
+    const foldedWidth = stringWidth(joined)
+    if (foldedWidth <= budget) {
+      return joined
+    }
+    // 折叠后仍超预算，落到下面的保底截断路径（使用原逐项 entries）。
+  }
 
   // 渐进式加载：bundled保留完整描述，非bundled仅名称
   // 非bundled的描述通过skill_discovery attachment动态补充

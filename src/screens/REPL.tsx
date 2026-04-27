@@ -3297,7 +3297,10 @@ export function REPL({
       proactiveModule?.resumeProactive();
     }
 
-    if (!hasRemoteExecutionConfig && !speculationAccept && input.trim() === 'load skill') {
+    // 触发渐进式 skill 加载：只要用户输入中包含 "load skill" 子串就视为触发，
+    // 用于在第三方 API / 默认懒加载场景下主动扫 skills 目录；未触发时系统提示词
+    // 与 skill_listing attachment 都保持 lazy，避免常驻 token 浪费。
+    if (!hasRemoteExecutionConfig && !speculationAccept && input.includes('load skill')) {
       enableExplicitSkillLoading();
       void skillChangeDetector.initialize();
       clearCommandsCache();

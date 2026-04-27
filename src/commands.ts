@@ -76,6 +76,7 @@ import sessionReplayRun from './commands/session-replay-run/index.js'
 import evolveAutopilot from './commands/evolve-autopilot/index.js'
 import toolBandit from './commands/tool-bandit/index.js'
 import skillCandidates from './commands/skill-candidates/index.js'
+import skillRoi from './commands/skill-roi/index.js'
 import rehydrateCommand from './commands/rehydrate.js'
 import help from './commands/help/index.js'
 import ide from './commands/ide/index.js'
@@ -408,6 +409,7 @@ const COMMANDS = memoize((): Command[] => [
   evolveAutopilot,
   toolBandit,
   skillCandidates,
+  skillRoi,
   rehydrateCommand,
   mobile,
   model,

@@ -211,6 +211,10 @@ export function AttachmentMessage({
       }
     case 'skill_listing':
       {
+        // 方向 G：lazy-stub 不是真实 catalog，不在 UI 展示"X skills available"。
+        if (attachment.variant === 'lazy-stub') {
+          return null;
+        }
         if (attachment.isInitial) {
           return null;
         }
