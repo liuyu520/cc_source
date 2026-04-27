@@ -41,6 +41,12 @@ const DEFAULT_W_KEYWORD = 0.5
 const DEFAULT_W_FREQUENCY = 0.4
 const DEFAULT_W_BUNDLED = 0.1 // bundled skill 加一点 baseline bonus
 
+// 方向 F（2026-04-27）：skillRoute learner 的 prior 作为第 4 信号。
+// prior 已在 [-0.48, +0.48] 区间(见 getSkillRoutePriorBias),把它归一到 [0,1]
+// 后再加权,故单独设一个小权重,避免盖过 keyword/frequency 等强信号。
+// 默认 0.1 = 与 bundled bonus 同量级,做 tiebreaker。
+const DEFAULT_W_ROUTE = 0.1
+
 // 方向 L：连续 N 天未调用的非 bundled skill 从 listing 隐藏。
 // 30 天是经验值 —— 覆盖"一个迭代周期"，避免节假日误伤。
 const DEFAULT_DORMANT_DAYS = 30
@@ -212,17 +218,30 @@ function scoreOne(
   cmd: Command,
   inputTokens: Set<string>,
   stats: SkillUsageStats | null,
-  weights: { keyword: number; frequency: number; bundled: number },
+  weights: { keyword: number; frequency: number; bundled: number; route: number },
+  routeSnapshot: Readonly<Record<string, number>> | null,
 ): number {
   const kScore = inputTokens.size > 0 ? keywordScore(inputTokens, extractSkillTokens(cmd)) : 0
   const fScore = stats ? getSkillFrequencyScore(cmd.name, stats) : 0
   const bBonus =
     cmd.type === 'prompt' && cmd.source === 'bundled' ? 1 : 0
 
+  // 方向 F：routeSnapshot[name] 已是 [0.02, 0.98] 软分,归一为 [0, 1] 打分
+  // 未登记 / 快照缺失 → 0 不影响排序。中性值 0.5 加权后是固定 baseline
+  // (weights.route * 0.5),不改变相对顺序,天然无害。
+  let rScore = 0
+  if (routeSnapshot) {
+    const raw = routeSnapshot[cmd.name]
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      rScore = Math.max(0, Math.min(1, raw))
+    }
+  }
+
   return (
     weights.keyword * kScore +
     weights.frequency * fScore +
-    weights.bundled * bBonus
+    weights.bundled * bBonus +
+    weights.route * rScore
   )
 }
 
@@ -243,14 +262,15 @@ function scoreOne(
 export function rankSkillsForListing(
   commands: Command[],
   userInput?: string | null,
+  routeSnapshot?: Readonly<Record<string, number>> | null,
 ): Command[] {
   if (commands.length <= 1) return commands
   if (isRankerDisabled()) return commands
 
   const inputTokens = tokenize(userInput ?? '')
 
-  // 拿 stats：优先内存缓存（零 IO）；冷缓存则 readFileSync 填充（极少见）。
-  // 这里放在排序入口，保证一次排序内 stats 稳定。
+  // 拿 stats:优先内存缓存(零 IO);冷缓存则 readFileSync 填充(极少见)。
+  // 这里放在排序入口,保证一次排序内 stats 稳定。
   let stats: SkillUsageStats | null = getCachedUsageStats()
   if (!stats) {
     try {
@@ -264,7 +284,13 @@ export function rankSkillsForListing(
     keyword: readWeight('CLAUDE_CODE_SKILL_RANK_W_KEYWORD', DEFAULT_W_KEYWORD),
     frequency: readWeight('CLAUDE_CODE_SKILL_RANK_W_FREQUENCY', DEFAULT_W_FREQUENCY),
     bundled: readWeight('CLAUDE_CODE_SKILL_RANK_W_BUNDLED', DEFAULT_W_BUNDLED),
+    route: readWeight('CLAUDE_CODE_SKILL_RANK_W_ROUTE', DEFAULT_W_ROUTE),
   }
+
+  // 方向 F:routeSnapshot=null 视为 learner 未启用,等价于权重 0,不影响行为。
+  const effectiveRoute = routeSnapshot && Object.keys(routeSnapshot).length > 0
+    ? routeSnapshot
+    : null
 
   const dormantDays = readPositiveNumber(
     'CLAUDE_CODE_SKILL_DORMANT_DAYS',
@@ -296,7 +322,7 @@ export function rankSkillsForListing(
   const scored = liveCommands.map((cmd, idx) => ({
     cmd,
     idx,
-    score: scoreOne(cmd, inputTokens, stats, weights),
+    score: scoreOne(cmd, inputTokens, stats, weights, effectiveRoute),
     isBundled: cmd.type === 'prompt' && cmd.source === 'bundled',
   }))
 
@@ -335,7 +361,8 @@ export function rankSkillsForListing(
 export function explainRanking(
   commands: Command[],
   userInput?: string | null,
-): Array<{ name: string; score: number; keyword: number; frequency: number; bundled: boolean }> {
+  routeSnapshot?: Readonly<Record<string, number>> | null,
+): Array<{ name: string; score: number; keyword: number; frequency: number; bundled: boolean; route: number }> {
   const inputTokens = tokenize(userInput ?? '')
   let stats: SkillUsageStats | null = getCachedUsageStats()
   if (!stats) {
@@ -349,20 +376,33 @@ export function explainRanking(
     keyword: readWeight('CLAUDE_CODE_SKILL_RANK_W_KEYWORD', DEFAULT_W_KEYWORD),
     frequency: readWeight('CLAUDE_CODE_SKILL_RANK_W_FREQUENCY', DEFAULT_W_FREQUENCY),
     bundled: readWeight('CLAUDE_CODE_SKILL_RANK_W_BUNDLED', DEFAULT_W_BUNDLED),
+    route: readWeight('CLAUDE_CODE_SKILL_RANK_W_ROUTE', DEFAULT_W_ROUTE),
   }
+  const effectiveRoute = routeSnapshot && Object.keys(routeSnapshot).length > 0
+    ? routeSnapshot
+    : null
   return commands.map(cmd => {
     const kScore = inputTokens.size > 0 ? keywordScore(inputTokens, extractSkillTokens(cmd)) : 0
     const fScore = stats ? getSkillFrequencyScore(cmd.name, stats) : 0
     const isBundled = cmd.type === 'prompt' && cmd.source === 'bundled'
+    let rScore = 0
+    if (effectiveRoute) {
+      const raw = effectiveRoute[cmd.name]
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        rScore = Math.max(0, Math.min(1, raw))
+      }
+    }
     return {
       name: cmd.name,
       keyword: kScore,
       frequency: fScore,
       bundled: isBundled,
+      route: rScore,
       score:
         weights.keyword * kScore +
         weights.frequency * fScore +
-        weights.bundled * (isBundled ? 1 : 0),
+        weights.bundled * (isBundled ? 1 : 0) +
+        weights.route * rScore,
     }
   })
 }

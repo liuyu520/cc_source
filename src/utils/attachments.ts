@@ -3041,7 +3041,19 @@ async function getSkillListingAttachments(
   // 方向 C/J/K（2026-04-27）：在 formatCommandsWithinBudget 截断前先重排，
   // 使得命中关键词 + 历史高频 + bundled 的 skill 先进预算。userInput 空也无害，
   // 此时 keyword 项为 0，退化为"频率 + bundled"排序，等价于"懒人历史"策略。
-  const rankedSkills = rankSkillsForListing(newSkills, userInput)
+  //
+  // 方向 F（2026-04-27）:并入 skillRoute learner 的 prior 作为第 4 信号。
+  // snapshot 读失败 / 空 → null,等价权重 0,不影响行为。故障安全。
+  let routeSnapshot: Readonly<Record<string, number>> | null = null
+  try {
+    const { loadSkillRoutePriorsSnapshot } = await import(
+      '../services/autoEvolve/learners/runtime.js'
+    )
+    routeSnapshot = await loadSkillRoutePriorsSnapshot()
+  } catch {
+    routeSnapshot = null
+  }
+  const rankedSkills = rankSkillsForListing(newSkills, userInput, routeSnapshot)
 
   // Format within budget using existing logic
   const contextWindowTokens = getContextWindowForModel(
