@@ -5,6 +5,7 @@
 import type {
   BetaMessageStreamParams,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
+import { NO_CONTENT_MESSAGE } from '../../constants/messages.js'
 import type { ProviderCapabilities } from './providerCapabilities.js'
 import { FULL_CAPABILITIES } from './providerCapabilities.js'
 
@@ -24,6 +25,31 @@ export function filterByCapabilities(
 
   const stripped: string[] = []
   const filtered = { ...params }
+
+  // 0. 非官方直连 provider 的历史 thinking 签名不可复用。
+  // Bedrock/代理/第三方上游会严格校验 stale signature，最终请求前兜底移除
+  // signature-bearing blocks，防止上游返回 Invalid `signature` in `thinking` block。
+  if (filtered.messages?.length) {
+    let signatureBlocksCleaned = false
+    filtered.messages = filtered.messages.map((msg: any) => {
+      if (msg.role !== 'assistant' || !Array.isArray(msg.content)) return msg
+      const cleanedContent = msg.content.filter((block: any) => {
+        const shouldStrip =
+          block?.type === 'thinking' ||
+          block?.type === 'redacted_thinking' ||
+          block?.type === 'connector_text'
+        if (shouldStrip) signatureBlocksCleaned = true
+        return !shouldStrip
+      })
+      if (cleanedContent.length === msg.content.length) return msg
+      const safeContent =
+        cleanedContent.length > 0
+          ? cleanedContent
+          : [{ type: 'text' as const, text: NO_CONTENT_MESSAGE }]
+      return { ...msg, content: safeContent }
+    })
+    if (signatureBlocksCleaned) stripped.push('messages.signature_blocks')
+  }
 
   // 1. Beta headers 过滤（白名单模式）
   // supportedBetas 为空数组 = 不发送任何 beta header

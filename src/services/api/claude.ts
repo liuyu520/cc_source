@@ -89,6 +89,7 @@ import {
   removeEmptyMessages,
   stripAdvisorBlocks,
   stripCallerFieldFromAssistantMessage,
+  stripSignatureBlocks,
   stripToolReferenceBlocksFromUserMessage,
 } from '../../utils/messages.js'
 import {
@@ -1313,6 +1314,24 @@ async function* queryModel(
   queryCheckpoint('query_message_normalization_start')
   let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools)
   queryCheckpoint('query_message_normalization_end')
+
+  // Bedrock and Anthropic-compatible proxies validate thinking signatures
+  // against the exact upstream context. Resumed/compacted/proxied sessions may
+  // contain stale signatures from a previous credential, model, or provider,
+  // which causes a hard 400. Strip only the API request copy; the UI/transcript
+  // history remains untouched. Include non-official base URLs because many
+  // Bedrock deployments are exposed through ANTHROPIC_BASE_URL and therefore do
+  // not report getAPIProvider() === 'bedrock'.
+  const providerForSignatureBlocks = getAPIProvider()
+  const shouldStripSignatureBlocks =
+    providerForSignatureBlocks === 'bedrock' ||
+    providerForSignatureBlocks === 'vertex' ||
+    providerForSignatureBlocks === 'foundry' ||
+    providerForSignatureBlocks === 'thirdParty' ||
+    !isFirstPartyAnthropicBaseUrl()
+  if (shouldStripSignatureBlocks) {
+    messagesForAPI = stripSignatureBlocks(messagesForAPI)
+  }
 
   // Model-specific post-processing: strip tool-search-specific fields if the
   // selected model doesn't support tool search.

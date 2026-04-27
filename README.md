@@ -11464,8 +11464,75 @@ bun -e "…)
 │ CLAUDE_CODE_SKILL_TRIGGER_TTL_MS                     │ 900000      │ 触发后渐进窗口            │
 └──────────────────────────────────────────────────────┴─────────────┴───────────────────────────┘
 --------------------------------------------------------
+我反思当前最终状态后，结论不变：
+
+没有发现必须修复的漏洞。
+
+已完成的两类修改分别是：
+
+dbca48d feat(token-efficiency): add prompt footprint autoplan
+- 风险点已覆盖：
+- Codex/thirdParty 只走精简 prompt。
+- OAuth proxy 仍保留完整 firstParty prompt。
+- memory budget 有 auto|on|off gate。
+- /context、/cost 只读输出，不自动降载。
+- 没发现破坏现有行为的问题。
+f3a071d fix(refinery): report global off before read exemption
+- 只调整诊断 reason 顺序。
+- 不改变裁剪行为。
+- 不改变 Read/NotebookRead 默认豁免。
+- 不改变 per-tool override。
+
+唯一提升点：
+- 以后如果项目引入真实测试体系，可以给 refineToolResult() 和 buildTokenEfficiencyPlan() 补单测。
+- 但当前项目没有测试脚本；现在强行创建测试框架是不必要的。
+
 
 --------------------------------------------------------
+
+改动点
+
+文件：src/services/api/claude.ts
+
+在 Bedrock 请求构造前，对发给 API 的历史消息副本执行：
+
+if (getAPIProvider() === 'bedrock') {
+messagesForAPI = stripSignatureBlocks(messagesForAPI)
+}
+
+作用：
+
+- 移除历史 assistant 消息里的 thinking / redacted_thinking / connector_text 签名块
+- 避免 Bedrock 校验旧会话、压缩会话、跨 provider、跨 credential 产生的 stale signature
+- 只改 API request copy，不改 UI / transcript 原始历史
+- 不影响 firstParty / thirdParty / codex 路径
+
+根因
+
+Bedrock 对 thinking block 的 signature 校验很严格。历史消息里如果带了旧签名，会触发：
+
+Invalid `signature` in `thinking` block
+
+仓库里已有 stripSignatureBlocks()，但之前只在 ant 内部模型 fallback 分支用，Bedrock 正常对话不会走到，所以需要在 Bedrock 请求前统一清理。
+
+已验证
+
+真实执行了：
+
+bun --check src/services/api/claude.ts
+bun run --cwd ... version
+bun run --cwd ... dev:restore-check
+git diff --check -- src/services/api/claude.ts
+
+结果：
+
+- bun --check 通过
+- CLI --version 正常输出：260414.0.6-hanjun (Claude Code)
+- restore check：missing relative imports: 0
+- diff 空白检查通过
+
+未重启服务，未造 mock。当前工作区还有用户原本已有的 README.md 修改，我没有动。
+
 
 --------------------------------------------------------
 
