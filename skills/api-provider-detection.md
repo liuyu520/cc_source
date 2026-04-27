@@ -90,6 +90,12 @@ if (shouldBudgetAllToolResults(provider)) {
 | 输出 token 16K/32K | `src/utils/context.ts` | `getMaxOutputTokens()` | - |
 | 跳过 Anthropic beta headers | `src/utils/betas.ts` | `getBetaHeaders()` | - |
 | 跳过 API metadata | `src/services/api/claude.ts` | `sendRequest()` | - |
+| **Bearer header 兼容**（非降级） | `src/services/api/client.ts` | `configureApiKeyHeaders()` | - |
+
+最后一行不是性能降级，而是**认证兼容层**：
+thirdParty 时将 `ANTHROPIC_API_KEY` 同步写入 `Authorization: Bearer`，
+解决 MiniMax 等端点只认 Bearer 不认 `x-api-key` 的 401 问题。
+详见 `skills/third-party-api-bearer-header.md`。
 
 详见 `skills/third-party-performance-tuning.md` 了解每项优化的详细说明和调优方法。
 

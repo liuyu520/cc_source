@@ -45,6 +45,15 @@ claude
 
 **核心逻辑**：有 API Key = thirdParty，无 API Key = firstParty。
 
+### 第三方 API 的 Bearer Header 兼容
+
+thirdParty 模式下，SDK 默认发送 `x-api-key`，但部分第三方兼容端点（如 MiniMax）
+**只识别** `Authorization: Bearer <token>`。`configureApiKeyHeaders()`
+在 `getAPIProvider() === 'thirdParty'` 时会把 `ANTHROPIC_API_KEY`
+以 Bearer token 形式**同时**写入 `Authorization` header，解决 401 Invalid token。
+
+详见 `skills/third-party-api-bearer-header.md`。
+
 ### 场景 3: API 模式自动检测（CLAUDE_API_MODE）
 
 当 settings.json 中配置了 OAuth 代理 URL，但 shell 环境提供了 API Key 时，
@@ -108,6 +117,7 @@ export CLAUDE_CODE_MAX_CONTEXT_TOKENS=200000 # 自定义上下文窗口
 | Provider 判定 | `src/utils/model/providers.ts:7-28` |
 | OAuth 启用控制 | `src/utils/auth.ts:100-105` |
 | SDK client 认证 | `src/services/api/client.ts:300-335` |
+| 第三方 Bearer 兼容 | `src/services/api/client.ts:442-454` |
 | OAuth beta header | `src/utils/betas.ts:244-253` |
 | 模型名映射 | `src/utils/model/configs.ts` |
 | OAuth URL 代理 | `src/constants/oauth.ts:85-120` |

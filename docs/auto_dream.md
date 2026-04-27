@@ -245,7 +245,7 @@ CLAUDE_DREAM_PIPELINE_MICRO=1
 - bun run version
 
 结果正常：
-- 260414.0.7-hanjun (Claude Code)
+- 260414.0.8-hanjun (Claude Code)
 
 3.2 带 dream 环境变量启动 CLI 没报错
 

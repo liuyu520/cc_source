@@ -290,7 +290,7 @@ stopDaemon(): clearInterval 全部
 ## 八、验证结果
 
 - [x] 全部 10 个文件 transpile 通过（28ms）
-- [x] `bun run version` 输出 `260414.0.7-hanjun`
+- [x] `bun run version` 输出 `260414.0.8-hanjun`
 - [x] 所有新功能默认 OFF（feature flag 门控），零回归
 - [x] 现有 autoDream legacy 路径完全保留
 - [x] 现有 RCA 证据流保留（双写兼容）
