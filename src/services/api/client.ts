@@ -445,7 +445,9 @@ async function configureApiKeyHeaders(
 ): Promise<void> {
   const token =
     process.env.ANTHROPIC_AUTH_TOKEN ||
-    (await getApiKeyFromApiKeyHelper(isNonInteractiveSession))
+    (await getApiKeyFromApiKeyHelper(isNonInteractiveSession)) ||
+    // 第三方 API（如 MiniMax）可能只认 Authorization: Bearer 而不认 x-api-key
+    (getAPIProvider() === 'thirdParty' ? process.env.ANTHROPIC_API_KEY : undefined)
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
