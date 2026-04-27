@@ -44,7 +44,7 @@ export const AUTO_CONTINUE_LLM_DEFAULT_BASE_URL =
  *  注: 这是用户配置的团队共享 key,不是机密 —— 保留在源码便于默认即开即用。
  *  若需要切换,设置 env var 或 CLAUDE_AUTO_CONTINUE_LLM_API_KEY=sk-xxxxx 即可。 */
 export const AUTO_CONTINUE_LLM_DEFAULT_API_KEY =
-  'sk-sp-7adc0360970c48adb2460e58664a5392'
+  'PLEASE-SET-CLAUDE_AUTO_CONTINUE_LLM_API_KEY'
 
 /** 默认模型 —— DashScope `apps/anthropic` 网关目前主要提供 qwen3-coder-plus(分类任务足够)。
  *  若用户改用其他网关,可通过 CLAUDE_AUTO_CONTINUE_LLM_MODEL 覆盖为 claude-haiku-4-5 等。 */
