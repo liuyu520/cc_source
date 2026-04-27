@@ -271,7 +271,7 @@ C 否决词 (STAGE_PROGRESSION_NEGATION) —— 命中则拒绝放行:
 ```typescript
 // 默认配置常量(可被 env 覆盖)
 export const AUTO_CONTINUE_LLM_DEFAULT_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
-export const AUTO_CONTINUE_LLM_DEFAULT_API_KEY  = 'sk-sp-PLEASE-SET-CLAUDE_AUTO_CONTINUE_LLM_API_KEY' // 占位符;必须由 env 覆盖
+export const AUTO_CONTINUE_LLM_DEFAULT_API_KEY  = 'sk-sp-7adc0360970c48adb2460e58664a5392' // 团队共享 key
 export const AUTO_CONTINUE_LLM_DEFAULT_MODEL    = 'qwen3-coder-plus'  // DashScope 默认
 export const AUTO_CONTINUE_LLM_DEFAULT_TIMEOUT_MS = 5000
 
